@@ -1,0 +1,153 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Sede {
+  id        Int      @id @default(autoincrement())
+  nombre    String
+  tipoSede  TipoSede
+  ciudad    String
+  direccion String
+  activo    Boolean  @default(true)
+
+  ordenes  OrdenServicio[]
+  usuarios Usuario[]
+}
+
+model Usuario {
+  id       Int        @id @default(autoincrement())
+  nombre   String
+  email    String     @unique
+  password String
+  rol      RolUsuario
+  sede     Sede?      @relation(fields: [sedeId], references: [id])
+  sedeId   Int?
+
+  ordenesAsignadas OrdenServicio[] @relation("TecnicoOrdenes")
+}
+
+model Cliente {
+  id        Int     @id @default(autoincrement())
+  nombre    String
+  documento String?
+  telefono  String?
+  correo    String?
+  empresa   String?
+
+  equipos Equipo[]
+  ordenes OrdenServicio[]
+}
+
+model Equipo {
+  id          Int     @id @default(autoincrement())
+  cliente     Cliente @relation(fields: [clienteId], references: [id])
+  clienteId   Int
+  marca       String
+  modelo      String
+  serial      String
+  descripcion String?
+
+  ordenes OrdenServicio[]
+}
+
+model OrdenServicio {
+  id        Int     @id @default(autoincrement())
+  codigo    String  @unique
+  sede      Sede    @relation(fields: [sedeId], references: [id])
+  sedeId    Int
+  cliente   Cliente @relation(fields: [clienteId], references: [id])
+  clienteId Int
+  equipo    Equipo  @relation(fields: [equipoId], references: [id])
+  equipoId  Int
+
+  tipoIngreso   TipoIngreso
+  motivoIngreso String
+  estado        EstadoOrden @default(ABIERTA)
+  fechaIngreso  DateTime    @default(now())
+  fechaSalida   DateTime?
+
+  tecnicoAsignado Usuario? @relation("TecnicoOrdenes", fields: [tecnicoId], references: [id])
+  tecnicoId       Int?
+
+  manoObra  OrdenManoObra[]
+  repuestos OrdenRepuesto[]
+
+  eventos OrdenEvento[]
+}
+
+model OrdenManoObra {
+  id      Int           @id @default(autoincrement())
+  orden   OrdenServicio @relation(fields: [ordenId], references: [id])
+  ordenId Int
+
+  descripcionTrabajo String
+  horas              Float
+  costoHora          Float
+  subtotal           Float
+}
+
+model Repuesto {
+  id          Int    @id @default(autoincrement())
+  codigo      String @unique
+  descripcion String
+  costo       Float
+  stockGlobal Int    @default(0)
+
+  movimientos OrdenRepuesto[]
+}
+
+model OrdenRepuesto {
+  id         Int           @id @default(autoincrement())
+  orden      OrdenServicio @relation(fields: [ordenId], references: [id])
+  ordenId    Int
+  repuesto   Repuesto      @relation(fields: [repuestoId], references: [id])
+  repuestoId Int
+
+  cantidad      Int
+  costoUnitario Float
+  esGarantia    Boolean @default(false)
+  subtotal      Float
+}  
+
+model OrdenEvento {
+  id      Int           @id @default(autoincrement())
+  orden   OrdenServicio @relation(fields: [ordenId], references: [id])
+  ordenId Int
+
+  tipo      String
+  detalle   String?
+  usuarioId Int?   
+  createdAt DateTime @default(now())
+
+  @@index([ordenId])
+  @@index([createdAt])
+}
+
+enum TipoSede {
+  PRINCIPAL
+  PUNTO_VENTA
+}
+
+enum RolUsuario {
+  ADMIN
+  JEFE_TALLER
+  TECNICO
+}
+
+enum TipoIngreso {
+  GARANTIA
+  MANTENIMIENTO
+  REPARACION
+}
+
+enum EstadoOrden {
+  ABIERTA
+  EN_PROCESO
+  ESPERANDO_REPUESTO
+  FINALIZADA
+  ENTREGADA
+}
