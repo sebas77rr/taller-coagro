@@ -1126,7 +1126,7 @@ app.delete(
       res.status(500).json({ error: "Error eliminando repuesto" });
     }
   }
-);
+);  
 
 /* =========================================================
    Arranque
