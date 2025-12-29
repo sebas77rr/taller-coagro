@@ -21,7 +21,7 @@ const prisma = new PrismaClient({ adapter });
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); 
 
 /* =========================================================
    Helpers: Eventos (auditoría)
