@@ -1100,12 +1100,12 @@ app.delete(
         where: { id: itemId },
         include: { repuesto: true },
       });
-
+    
       if (!item || item.ordenId !== ordenId) {
         return res
           .status(404)
           .json({ error: "Repuesto en orden no encontrado" });
-      }
+      }   
 
       await prisma.ordenRepuesto.delete({ where: { id: itemId } });
 
@@ -1122,7 +1122,7 @@ app.delete(
       res.status(500).json({ error: "Error eliminando repuesto" }); 
     }
   }
-);  
+);      
 
 /* =========================================================
    Arranque
