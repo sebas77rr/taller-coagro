@@ -1129,9 +1129,17 @@ app.delete(
 ========================================================= */
 
 const PORT = process.env.PORT || 4000;
+
+// Healthcheck principal
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "API Taller Coagro online" });
 });
-app.listen(PORT, () => {
-  console.log(`API Taller Coagro corriendo en puerto ${PORT}`);
+
+// Verificación de archivo activo
+app.get("/whoami", (req, res) => {
+  res.send("SERVER.JS ACTIVO ✅");
 });
+
+app.listen(PORT, () => {
+  console.log(`🚀 API Taller Coagro corriendo en puerto ${PORT}`);
+}); 
