@@ -2,8 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import pkg from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-import pg from "pg";
+// import { PrismaPg } from "@prisma/adapter-pg";
+// import pg from "pg";
+import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
@@ -11,16 +12,18 @@ dotenv.config();
 
 const { PrismaClient } = pkg;
 
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+// const pool = new pg.Pool({
+//   connectionString: process.env.DATABASE_URL,
+// });
 
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
+// const adapter = new PrismaPg(pool);
+// const prisma = new PrismaClient({ adapter });
+
+const prisma = new PrismaClient(); 
 
 const app = express();
 
-app.use(cors());
+app.use(cors());  
 app.use(express.json()); 
 
 /* =========================================================
@@ -1123,7 +1126,7 @@ app.delete(
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Error eliminando repuesto" });
+      res.status(500).json({ error: "Error eliminando repuesto" }); 
     }
   }
 );  
@@ -1133,6 +1136,9 @@ app.delete(
 ========================================================= */
 
 const PORT = process.env.PORT || 4000;
+app.get("/", (req, res) => {
+  res.json({ ok: true, message: "API Taller Coagro online" });
+});
 app.listen(PORT, () => {
   console.log(`API Taller Coagro corriendo en puerto ${PORT}`);
 });
