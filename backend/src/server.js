@@ -1,29 +1,23 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import pkg from "@prisma/client";
-// import { PrismaPg } from "@prisma/adapter-pg";
-// import pg from "pg";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
 dotenv.config();
 
-const { PrismaClient } = pkg;
+// Prisma Client (MySQL)
+const prisma = new PrismaClient();
 
-// const pool = new pg.Pool({
-//   connectionString: process.env.DATABASE_URL,
-// });
-
-// const adapter = new PrismaPg(pool);
-// const prisma = new PrismaClient({ adapter });
-
-const prisma = new PrismaClient(); 
+// Intento de conexión seguro (no tumba la app)
+prisma.$connect()
+  .then(() => console.log("✅ DB connected"))
+  .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 
 const app = express();
 
-app.use(cors());  
+app.use(cors());
 app.use(express.json());   
 /* =========================================================
    Helpers: Eventos (auditoría)
