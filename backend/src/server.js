@@ -1169,6 +1169,30 @@ app.get("/debug/login-check", async (req, res) => {
   });
 });
 
+app.get("/debug/db", async (req, res) => {
+  try {
+    await prisma.$connect();
+    const count = await prisma.usuario.count();
+    res.json({ ok: true, message: "DB OK", usuarios: count });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      message: "DB FAIL",
+      error: e?.message || String(e),
+    });
+  }
+});      
+
+app.get("/debug/user", async (req, res) => {
+  try {
+    const email = String(req.query.email || "");
+    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    res.json({ ok: true, usuario: usuario ? { id: usuario.id, email: usuario.email } : null });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});       
+
 
 /* =========================================================
    Arranque
