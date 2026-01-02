@@ -1253,6 +1253,21 @@ app.get("/debug/env-lite", (req, res) => {
   });
 });
 
+import mysql from "mysql2/promise";
+
+app.get("/debug/mysql", async (req, res) => {
+  try {
+    const url = process.env.DATABASE_URL;
+    const conn = await mysql.createConnection(url);
+    const [rows] = await conn.query("SELECT 1 AS ok");
+    await conn.end();
+    res.json({ ok: true, rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+
 /* =========================================================
    Arranque
 ========================================================= */
