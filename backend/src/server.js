@@ -1245,6 +1245,18 @@ app.get("/debug/build", (req, res) => {
   });
 });
 
+app.get("/debug/env-lite", (req, res) => {
+  const v = process.env.DATABASE_URL || "";
+  res.json({
+    has_DATABASE_URL: !!process.env.DATABASE_URL,
+    db_length: v.length,
+    db_prefix10: v.slice(0, 10),
+    startsWithMysql: v.startsWith("mysql://"),
+    NODE_ENV: process.env.NODE_ENV,
+  });
+});
+
+
 /* =========================================================
    Arranque
 ========================================================= */
