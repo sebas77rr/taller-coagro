@@ -7,6 +7,11 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET no está definida");
+  process.exit(1);
+}
+
 // ✅ Fallback primero (antes de cualquier validación)
 process.env.DATABASE_URL =
   process.env.DATABASE_URL || process.env.DATABASE_URL_FALLBACK;
