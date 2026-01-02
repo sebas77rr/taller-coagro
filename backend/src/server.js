@@ -1237,6 +1237,14 @@ app.get("/debug/login-check", async (req, res) => {
   });
 });  
 
+app.get("/debug/build", (req, res) => {
+  res.json({
+    ok: true,
+    build: process.env.BUILD_ID || "no-build-id",
+    time: new Date().toISOString(),
+  });
+});
+
 /* =========================================================
    Arranque
 ========================================================= */
