@@ -5,22 +5,37 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
-// 🔥 FORZAR dotenv a leer el .env desde la raíz real del proyecto (no depende del cwd)
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 
+// =========================================================
+// 🔥 DOTENV HOSTINGER-PROOF
+// - Hostinger a veces no inyecta env vars
+// - y el deploy puede borrar .env (porque no está en Git)
+// - por eso usamos un archivo NO oculto y "persistente":
+//   /config/runtime.env (en public_html/config/runtime.env)
+// - fallback a ../.env (local)
+// =========================================================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// server.js está en /src, el .env está en la carpeta padre (/)
-dotenv.config({ path: path.resolve(__dirname, "../.env") });
+const runtimeEnvPath = path.resolve(__dirname, "../config/runtime.env"); // PROD
+const localEnvPath = path.resolve(__dirname, "../.env");                 // LOCAL
 
-/**
- * ✅ Sanitiza DATABASE_URL para Hostinger / envs raros:
- * - quita BOM invisibles
- * - quita comillas al inicio/fin
- * - elimina espacios y saltos de línea
- */
+const envPathToUse = fs.existsSync(runtimeEnvPath) ? runtimeEnvPath : localEnvPath;
+
+dotenv.config({ path: envPathToUse });
+
+console.log("dotenv loaded from:", envPathToUse);
+
+// =========================================================
+// ✅ Sanitiza DATABASE_URL para Hostinger / envs raros
+// - quita BOM invisibles
+// - quita caracteres zero-width
+// - quita comillas al inicio/fin
+// - elimina espacios y saltos de línea
+// =========================================================
 const sanitizeDbUrl = (v = "") =>
   String(v)
     .replace(/\uFEFF/g, "") // BOM
@@ -47,7 +62,6 @@ if (!process.env.JWT_SECRET) {
 
 if (!process.env.DATABASE_URL?.startsWith("mysql://")) {
   console.error("❌ DATABASE_URL inválida (no empieza con mysql://)");
-  // producción real: process.exit(1);
 }
 
 // ✅ Prisma Client (MySQL)
