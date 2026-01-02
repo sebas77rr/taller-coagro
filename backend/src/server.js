@@ -1142,6 +1142,34 @@ app.delete(
   }
 );      
 
+
+app.get("/debug/env", (req, res) => {
+  res.json({
+    hasJwt: !!process.env.JWT_SECRET,
+    hasDb: !!process.env.DATABASE_URL,
+    nodeEnv: process.env.NODE_ENV,
+  });
+});      
+
+app.get("/debug/login-check", async (req, res) => {
+  const email = "admin@coagro.com.co";
+  const plain = "Admin2025*"; // la que estás usando
+
+  const usuario = await prisma.usuario.findUnique({ where: { email } });
+
+  const bcryptOk = await bcrypt.compare(plain, usuario.password);
+
+  res.json({
+    found: !!usuario,
+    bcryptOk,
+    userId: usuario?.id,
+    rol: usuario?.rol,
+    sedeId: usuario?.sedeId,
+    hasJwt: !!process.env.JWT_SECRET,
+  });
+});
+
+
 /* =========================================================
    Arranque
 ========================================================= */
