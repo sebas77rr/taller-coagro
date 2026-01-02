@@ -7,6 +7,11 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
+if (!process.env.DATABASE_URL) {
+  console.error("❌ DATABASE_URL no está definida");
+  process.exit(1); // corta el server si falta
+}    
+
 // Prisma Client (MySQL)
 const prisma = new PrismaClient();
 
