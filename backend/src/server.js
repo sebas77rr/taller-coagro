@@ -5,59 +5,74 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
+/* =========================================================
+   ENV CONFIG
+========================================================= */
+
 dotenv.config();
 
-if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET no está definida");
-  process.exit(1);
-}
-
-// ✅ Fallback primero (antes de cualquier validación)
+// ✅ Fallbacks (Hostinger a veces no inyecta bien)
 process.env.DATABASE_URL =
   process.env.DATABASE_URL || process.env.DATABASE_URL_FALLBACK;
 
-// ✅ Log de entorno (sin filtrar secretos)
+process.env.JWT_SECRET =
+  process.env.JWT_SECRET || process.env.JWT_SECRET_FALLBACK;
+
+// ✅ Log de diagnóstico (SIN imprimir secretos)
 console.log("ENV CHECK:", {
   has_DATABASE_URL: !!process.env.DATABASE_URL,
   has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
   has_JWT_SECRET: !!process.env.JWT_SECRET,
-  node_env: process.env.NODE_ENV,
+  NODE_ENV: process.env.NODE_ENV,
 });
 
-// ❗️NO mates el server en Hostinger, porque si falla DB te deja 503.
-// Solo avisa. (Luego /debug/env te confirma qué está pasando)
+// ❗️No mates el server en producción (Hostinger)
+// solo avisa
 if (!process.env.DATABASE_URL) {
-  console.error(
-    "❌ DATABASE_URL no está definida (ni DATABASE_URL_FALLBACK). Prisma fallará."
-  );
+  console.error("❌ DATABASE_URL no definida → Prisma fallará");
 }
 
-// Prisma Client (MySQL)
+if (!process.env.JWT_SECRET) {
+  console.error("❌ JWT_SECRET no definida → Login fallará");
+}
+
+/* =========================================================
+   PRISMA
+========================================================= */
+
 const prisma = new PrismaClient();
 
-// ✅ Intento de conexión seguro (no tumba la app)
+// conexión segura (no tumba el server)
 prisma
   .$connect()
   .then(() => console.log("✅ DB connected"))
-  .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
+  .catch((e) =>
+    console.error("❌ DB connect failed:", e?.message || e)
+  );
+
+/* =========================================================
+   EXPRESS
+========================================================= */
 
 const app = express();
 
-// ✅ CORS pro (frontend en otro dominio)
 app.use(
   cors({
-    origin: true, 
+    origin: true,
     credentials: true,
   })
-);  
+);
+
 app.use(express.json());
 
-// ✅ Healthcheck
+/* =========================================================
+   HEALTH & DEBUG
+========================================================= */
+
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "API Taller Coagro online" });
 });
 
-// ✅ Debug env (para saber qué ve Hostinger)
 app.get("/debug/env", (req, res) => {
   res.json({
     ok: true,
@@ -68,10 +83,8 @@ app.get("/debug/env", (req, res) => {
   });
 });
 
-// ✅ Debug DB (para saber si Prisma conecta)
 app.get("/debug/db", async (req, res) => {
   try {
-    // consulta liviana
     await prisma.usuario.findFirst();
     res.json({ ok: true, message: "DB OK" });
   } catch (e) {
@@ -82,6 +95,7 @@ app.get("/debug/db", async (req, res) => {
     });
   }
 });
+   
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
