@@ -7,48 +7,47 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
-// ✅ HOSTINGER: limpiar URL (quita comillas/espacios/line breaks raros)
+/**
+ * ✅ Sanitiza DATABASE_URL para Hostinger / envs raros:
+ * - quita BOM invisibles
+ * - quita comillas al inicio/fin
+ * - elimina espacios y saltos de línea
+ */
 const sanitizeDbUrl = (v = "") =>
   String(v)
+    .replace(/\uFEFF/g, "")              // BOM
+    .replace(/[\u200B-\u200D\u2060]/g, "") // zero-width
     .trim()
-    .replace(/^\uFEFF/, "")           // BOM raro
-    .replace(/^['"]|['"]$/g, "")      // comillas al inicio/fin
-    .replace(/\s+/g, "");             // cualquier espacio/salto de línea
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\s+/g, "");
 
-const dbUrlRaw =
-  process.env.DATABASE_URL_CLEAN ||
-  process.env.DATABASE_URL ||
-  process.env.DATABASE_URL_FALLBACK ||
-  "";
+// ✅ Solo usamos DATABASE_URL (ya corregiste el nombre en Hostinger)
+process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
 
-process.env.DATABASE_URL = sanitizeDbUrl(dbUrlRaw);
-
-// ✅ HOSTINGER FIX: usar URL limpia (evita variables “contaminadas”)
-process.env.DATABASE_URL =
-  (process.env.DATABASE_URL_CLEAN || "").trim() ||
-  (process.env.DATABASE_URL || "").trim() ||
-  (process.env.DATABASE_URL_FALLBACK || "").trim();
-
-// ✅ Log de entorno (sin filtrar secretos)
+// ✅ Logs de diagnóstico (sin filtrar secretos)
 console.log("ENV CHECK:", {
+  NODE_ENV: process.env.NODE_ENV,
   has_DATABASE_URL: !!process.env.DATABASE_URL,
   startsWithMysql: (process.env.DATABASE_URL || "").startsWith("mysql://"),
   has_JWT_SECRET: !!process.env.JWT_SECRET,
-  node_env: process.env.NODE_ENV,
 });
 
+// ✅ Validaciones mínimas (no tumbes el server si sigues en debug)
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET no está definida");
-  // No mates el server si quieres seguir debug; pero para prod real, sí conviene:
+}
+
+if (!process.env.DATABASE_URL?.startsWith("mysql://")) {
+  console.error("❌ DATABASE_URL inválida (no empieza con mysql://)");
+  // En producción idealmente sí deberías tumbarlo:
   // process.exit(1);
 }
 
-// Prisma Client (MySQL)
+// ✅ Prisma Client (MySQL)
 const prisma = new PrismaClient();
 
-// ✅ Intento de conexión seguro (no tumba la app)
-prisma
-  .$connect()
+// ✅ Intento de conexión (útil para loguear si conecta sin tumbar la app)
+prisma.$connect()
   .then(() => console.log("✅ DB connected"))
   .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 
@@ -60,7 +59,8 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+
+app.use(express.json());  
   
 /* =========================================================
    Helpers: Eventos (auditoría)
@@ -1188,94 +1188,9 @@ app.delete(
 
 app.get("/debug/env", (req, res) => {
   res.json({
-    hasJwt: !!process.env.JWT_SECRET,
-    hasDb: !!process.env.DATABASE_URL,
-    nodeEnv: process.env.NODE_ENV,
-  });
-});      
-
-app.get("/debug/login-check", async (req, res) => {
-  const email = "admin@coagro.com.co";
-  const plain = "Admin2025*"; // la que estás usando
-
-  const usuario = await prisma.usuario.findUnique({ where: { email } });
-
-  const bcryptOk = await bcrypt.compare(plain, usuario.password);
-
-  res.json({
-    found: !!usuario,
-    bcryptOk,
-    userId: usuario?.id,
-    rol: usuario?.rol,
-    sedeId: usuario?.sedeId,
-    hasJwt: !!process.env.JWT_SECRET,
-  });
-});
-
-app.get("/debug/db", async (req, res) => {
-  try {
-    await prisma.$connect();
-    const count = await prisma.usuario.count();
-    res.json({ ok: true, message: "DB OK", usuarios: count });
-  } catch (e) {
-    res.status(500).json({
-      ok: false,
-      message: "DB FAIL",
-      error: e?.message || String(e),
-    });
-  }
-});      
-
-app.get("/debug/user", async (req, res) => {
-  try {
-    const email = String(req.query.email || "");
-    const usuario = await prisma.usuario.findUnique({ where: { email } });
-    res.json({ ok: true, usuario: usuario ? { id: usuario.id, email: usuario.email } : null });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});       
-
-app.get("/debug/env", (req, res) => {
-  res.json({
-    has_DATABASE_URL: !!process.env.DATABASE_URL,
-    env_keys: Object.keys(process.env).filter((k) =>
-      ["DATABASE", "JWT", "NODE", "PRISMA"].some((x) => k.includes(x))
-    ),
-  });
-});  
-
-app.get("/debug/env", (req, res) => {
-  res.json({
-    has_DATABASE_URL: !!process.env.DATABASE_URL,
-    has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
-    has_JWT_SECRET: !!process.env.JWT_SECRET,
     NODE_ENV: process.env.NODE_ENV,
-    keys: Object.keys(process.env).filter(k =>
-      k.includes("DATABASE") || k.includes("JWT") || k.includes("NODE")
-    ),
-  });
-});
-
-app.get("/debug/dburl", (req, res) => {
-  const v = process.env.DATABASE_URL || "";
-  res.json({
-    ok: true,
-    length: v.length,
-    startsWithMysql: v.startsWith("mysql://"),
-    head: v.slice(0, 12),        // solo muestra el inicio
-    hasSpaces: /\s/.test(v),
-    hasQuotes: v.includes('"') || v.includes("'"),
-  });
-});
-
-app.get("/debug/dburl", (req, res) => {
-  const v = process.env.DATABASE_URL || "";
-  res.json({
-    ok: true,
-    startsWithMysql: v.startsWith("mysql://"),
-    prefix: v.slice(0, 10), // muestra "mysql://..."
-    length: v.length,
+    has_DATABASE_URL: !!process.env.DATABASE_URL,
+    has_JWT_SECRET: !!process.env.JWT_SECRET,
   });
 });
 
@@ -1288,6 +1203,39 @@ app.get("/debug/dburl", (req, res) => {
     length: v.length,
   });
 });
+
+app.get("/debug/db", async (req, res) => {
+  try {
+    const count = await prisma.usuario.count();
+    res.json({ ok: true, message: "DB OK", usuarios: count });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      message: "DB FAIL",
+      error: e?.message || String(e),
+    });
+  }
+});
+
+app.get("/debug/login-check", async (req, res) => {
+  const email = "admin@coagro.com.co";
+  const plain = "Admin2025*";
+
+  const usuario = await prisma.usuario.findUnique({ where: { email } });
+  if (!usuario) {
+    return res.json({ found: false });
+  }
+
+  const bcryptOk = await bcrypt.compare(plain, usuario.password);
+
+  res.json({
+    found: true,
+    bcryptOk,
+    userId: usuario.id,
+    rol: usuario.rol,
+    hasJwt: !!process.env.JWT_SECRET,
+  });
+});  
 
 /* =========================================================
    Arranque
