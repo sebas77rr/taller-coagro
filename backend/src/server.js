@@ -7,23 +7,76 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
+// ✅ Fallback primero (antes de cualquier validación)
+process.env.DATABASE_URL =
+  process.env.DATABASE_URL || process.env.DATABASE_URL_FALLBACK;
+
+// ✅ Log de entorno (sin filtrar secretos)
+console.log("ENV CHECK:", {
+  has_DATABASE_URL: !!process.env.DATABASE_URL,
+  has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
+  has_JWT_SECRET: !!process.env.JWT_SECRET,
+  node_env: process.env.NODE_ENV,
+});
+
+// ❗️NO mates el server en Hostinger, porque si falla DB te deja 503.
+// Solo avisa. (Luego /debug/env te confirma qué está pasando)
 if (!process.env.DATABASE_URL) {
-  console.error("❌ DATABASE_URL no está definida");
-  process.exit(1); // corta el server si falta
-}    
+  console.error(
+    "❌ DATABASE_URL no está definida (ni DATABASE_URL_FALLBACK). Prisma fallará."
+  );
+}
 
 // Prisma Client (MySQL)
 const prisma = new PrismaClient();
 
-// Intento de conexión seguro (no tumba la app)
-prisma.$connect()
+// ✅ Intento de conexión seguro (no tumba la app)
+prisma
+  .$connect()
   .then(() => console.log("✅ DB connected"))
   .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());   
+// ✅ CORS pro (frontend en otro dominio)
+app.use(
+  cors({
+    origin: true, 
+    credentials: true,
+  })
+);  
+app.use(express.json());
+
+// ✅ Healthcheck
+app.get("/", (req, res) => {
+  res.json({ ok: true, message: "API Taller Coagro online" });
+});
+
+// ✅ Debug env (para saber qué ve Hostinger)
+app.get("/debug/env", (req, res) => {
+  res.json({
+    ok: true,
+    has_DATABASE_URL: !!process.env.DATABASE_URL,
+    has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
+    has_JWT_SECRET: !!process.env.JWT_SECRET,
+    NODE_ENV: process.env.NODE_ENV,
+  });
+});
+
+// ✅ Debug DB (para saber si Prisma conecta)
+app.get("/debug/db", async (req, res) => {
+  try {
+    // consulta liviana
+    await prisma.usuario.findFirst();
+    res.json({ ok: true, message: "DB OK" });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      message: "DB FAIL",
+      error: e?.message || String(e),
+    });
+  }
+});
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
@@ -1206,6 +1259,18 @@ app.get("/debug/env", (req, res) => {
     ),
   });
 });  
+
+app.get("/debug/env", (req, res) => {
+  res.json({
+    has_DATABASE_URL: !!process.env.DATABASE_URL,
+    has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
+    has_JWT_SECRET: !!process.env.JWT_SECRET,
+    NODE_ENV: process.env.NODE_ENV,
+    keys: Object.keys(process.env).filter(k =>
+      k.includes("DATABASE") || k.includes("JWT") || k.includes("NODE")
+    ),
+  });
+});
 
 /* =========================================================
    Arranque
