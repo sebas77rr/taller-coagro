@@ -86,7 +86,7 @@ app.get("/debug/env", (req, res) => {
 app.get("/debug/db", async (req, res) => {
   try {
     await prisma.usuario.findFirst();
-    res.json({ ok: true, message: "DB OK" });
+    res.json({ ok: true, message: "DB OK" });    
   } catch (e) {
     res.status(500).json({
       ok: false,
@@ -1288,6 +1288,18 @@ app.get("/debug/env", (req, res) => {
     keys: Object.keys(process.env).filter(k =>
       k.includes("DATABASE") || k.includes("JWT") || k.includes("NODE")
     ),
+  });
+});
+
+app.get("/debug/dburl", (req, res) => {
+  const v = process.env.DATABASE_URL || "";
+  res.json({
+    ok: true,
+    length: v.length,
+    startsWithMysql: v.startsWith("mysql://"),
+    head: v.slice(0, 12),        // solo muestra el inicio
+    hasSpaces: /\s/.test(v),
+    hasQuotes: v.includes('"') || v.includes("'"),
   });
 });
 
