@@ -1,73 +1,48 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
+// =========================================================
+// 🔥 HOSTINGER BYPASS (GRATIS, ESTABLE)
+// =========================================================
+const IS_PROD = process.env.NODE_ENV === "production";
+
+// ⛔ Hostinger no inyecta env vars → las definimos aquí
+if (IS_PROD) {
+  process.env.DATABASE_URL =
+    "mysql://u799993945_Desarrollador:CoagroInternacional2025%2A%2A@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
+
+  process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
+}
 
 // =========================================================
-// 🔥 DOTENV HOSTINGER-PROOF
-// - Hostinger a veces no inyecta env vars
-// - y el deploy puede borrar .env (porque no está en Git)
-// - por eso usamos un archivo NO oculto y "persistente":
-//   /config/runtime.env (en public_html/config/runtime.env)
-// - fallback a ../.env (local)
-// =========================================================
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const runtimeEnvPath = path.resolve(__dirname, "../config/runtime.env"); // PROD
-const localEnvPath = path.resolve(__dirname, "../.env");                 // LOCAL
-
-const envPathToUse = fs.existsSync(runtimeEnvPath) ? runtimeEnvPath : localEnvPath;
-
-dotenv.config({ path: envPathToUse });
-
-console.log("dotenv loaded from:", envPathToUse);
-
-// =========================================================
-// ✅ Sanitiza DATABASE_URL para Hostinger / envs raros
-// - quita BOM invisibles
-// - quita caracteres zero-width
-// - quita comillas al inicio/fin
-// - elimina espacios y saltos de línea
+// ✅ Sanitización defensiva (por si acaso)
 // =========================================================
 const sanitizeDbUrl = (v = "") =>
   String(v)
-    .replace(/\uFEFF/g, "") // BOM
-    .replace(/[\u200B-\u200D\u2060]/g, "") // zero-width
     .trim()
     .replace(/^['"]|['"]$/g, "")
     .replace(/\s+/g, "");
 
-// ✅ Limpieza final
 process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
 
-// ✅ Logs de diagnóstico (sin filtrar secretos)
+// =========================================================
+// Logs de confirmación
+// =========================================================
 console.log("ENV CHECK:", {
   NODE_ENV: process.env.NODE_ENV,
   has_DATABASE_URL: !!process.env.DATABASE_URL,
-  startsWithMysql: (process.env.DATABASE_URL || "").startsWith("mysql://"),
+  startsWithMysql: process.env.DATABASE_URL.startsWith("mysql://"),
   has_JWT_SECRET: !!process.env.JWT_SECRET,
 });
 
-// ✅ Validaciones mínimas
-if (!process.env.JWT_SECRET) {
-  console.error("❌ JWT_SECRET no está definida");
-}
-
-if (!process.env.DATABASE_URL?.startsWith("mysql://")) {
-  console.error("❌ DATABASE_URL inválida (no empieza con mysql://)");
-}
-
-// ✅ Prisma Client (MySQL)
+// =========================================================
+// Prisma
+// =========================================================
 const prisma = new PrismaClient();
 
-// ✅ Intento de conexión (útil para loguear si conecta sin tumbar la app)
 prisma
   .$connect()
   .then(() => console.log("✅ DB connected"))
@@ -82,8 +57,7 @@ app.use(
   })
 );
 
-app.use(express.json());  
-  
+app.use(express.json()); 
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
