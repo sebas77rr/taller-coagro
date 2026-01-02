@@ -100,42 +100,60 @@ app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Email y password son obligatorios" });
+      return res.status(400).json({ error: "Email y password son obligatorios" });
     }
 
     const usuario = await prisma.usuario.findUnique({ where: { email } });
-    if (!usuario)
+    if (!usuario) {
       return res.status(401).json({ error: "Credenciales inválidas" });
+    }
+
+    // ✅ Evita 500 por password null/undefined
+    if (!usuario.password) {
+      return res.status(500).json({
+        error: "Usuario sin password en BD (null). Revisa el seed/import.",
+      });
+    }
+
+    // ✅ Evita 500 por password plano (no hasheado)
+    if (!usuario.password.startsWith("$2")) {
+      return res.status(500).json({
+        error:
+          "Password en BD no está hasheado. Debe iniciar con $2 (bcrypt). Revisa import/seed.",
+      });
+    }
 
     const passwordValido = await bcrypt.compare(password, usuario.password);
-    if (!passwordValido)
+    if (!passwordValido) {
       return res.status(401).json({ error: "Credenciales inválidas" });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({ error: "JWT_SECRET no configurado" });
+    }
 
     const token = jwt.sign(
-      {
-        id: usuario.id,
-        rol: usuario.rol,
-        sedeId: usuario.sedeId,
-      },
+      { id: usuario.id, rol: usuario.rol, sedeId: usuario.sedeId },
       process.env.JWT_SECRET,
       { expiresIn: "5h" }
     );
 
-    res.json({
+    return res.json({
       token,
-      usuario: {
+      usuario: {  
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        rol: usuario.rol,
+        rol: usuario.rol,    
         sedeId: usuario.sedeId,
       },
     });
   } catch (error) {
     console.error("Error login:", error);
-    res.status(500).json({ error: "Error en login" });
+    return res.status(500).json({
+      error: "Error en login",
+      detail: error?.message || String(error),
+    });
   }
 });
 
