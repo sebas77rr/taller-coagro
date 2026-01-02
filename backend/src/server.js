@@ -12,7 +12,7 @@ const IS_PROD = process.env.NODE_ENV === "production";
 // ⛔ Hostinger no inyecta env vars → las definimos aquí
 if (IS_PROD) {
   process.env.DATABASE_URL =
-    "mysql://u799993945_Desarrollador:CoagroInternacional2025%2A%2A@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
+    "mysql://u799993945_Desarrollador:CoagroDB2026_A1@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
 
   process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
 }
@@ -57,7 +57,7 @@ app.use(
   })
 );
 
-app.use(express.json()); 
+app.use(express.json());
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
@@ -139,7 +139,9 @@ app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Email y password son obligatorios" });
+      return res
+        .status(400)
+        .json({ error: "Email y password son obligatorios" });
     }
 
     const usuario = await prisma.usuario.findUnique({ where: { email } });
@@ -179,11 +181,11 @@ app.post("/api/auth/login", async (req, res) => {
 
     return res.json({
       token,
-      usuario: {  
+      usuario: {
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        rol: usuario.rol,    
+        rol: usuario.rol,
         sedeId: usuario.sedeId,
       },
     });
@@ -1129,22 +1131,22 @@ app.patch(
         detalle: `Editó repuesto #${itemId}: "${item.repuesto?.codigo}" cant ${item.cantidad} -> ${upd.cantidad}, garantía ${item.esGarantia} -> ${upd.esGarantia}`,
         usuarioId: req.usuario?.id,
       });
-   
+
       res.json(upd);
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Error editando repuesto" });
     }
   }
-);   
+);
 
 app.delete(
-  "/api/ordenes/:ordenId/repuestos/:itemId",     
+  "/api/ordenes/:ordenId/repuestos/:itemId",
   verificarToken,
   async (req, res) => {
     try {
       const ordenId = Number(req.params.ordenId);
-      const itemId = Number(req.params.itemId);  
+      const itemId = Number(req.params.itemId);
 
       if (Number.isNaN(ordenId) || Number.isNaN(itemId)) {
         return res.status(400).json({ error: "IDs inválidos" });
@@ -1157,17 +1159,17 @@ app.delete(
         where: { id: itemId },
         include: { repuesto: true },
       });
-    
+
       if (!item || item.ordenId !== ordenId) {
         return res
           .status(404)
           .json({ error: "Repuesto en orden no encontrado" });
-      }   
+      }
 
       await prisma.ordenRepuesto.delete({ where: { id: itemId } });
 
-      await logOrdenEvento({   
-        ordenId,    
+      await logOrdenEvento({
+        ordenId,
         tipo: "REPUESTO_ELIMINADO",
         detalle: `Eliminó repuesto #${itemId}: "${item.repuesto?.codigo} · ${item.repuesto?.descripcion}" (cant ${item.cantidad})`,
         usuarioId: req.usuario?.id,
@@ -1176,11 +1178,10 @@ app.delete(
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: "Error eliminando repuesto" }); 
+      res.status(500).json({ error: "Error eliminando repuesto" });
     }
   }
-);      
-
+);
 
 app.get("/debug/env", (req, res) => {
   res.json({
@@ -1231,7 +1232,7 @@ app.get("/debug/login-check", async (req, res) => {
     rol: usuario.rol,
     hasJwt: !!process.env.JWT_SECRET,
   });
-});  
+});
 
 app.get("/debug/build", (req, res) => {
   res.json({
@@ -1252,7 +1253,6 @@ app.get("/debug/env-lite", (req, res) => {
   });
 });
 
-
 /* =========================================================
    Arranque
 ========================================================= */
@@ -1271,4 +1271,4 @@ app.get("/whoami", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 API Taller Coagro corriendo en puerto ${PORT}`);
-}); 
+});
