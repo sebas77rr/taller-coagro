@@ -1198,6 +1198,14 @@ app.get("/debug/user", async (req, res) => {
   }
 });       
 
+app.get("/debug/env", (req, res) => {
+  res.json({
+    has_DATABASE_URL: !!process.env.DATABASE_URL,
+    env_keys: Object.keys(process.env).filter((k) =>
+      ["DATABASE", "JWT", "NODE", "PRISMA"].some((x) => k.includes(x))
+    ),
+  });
+});  
 
 /* =========================================================
    Arranque
