@@ -7,6 +7,22 @@ import bcrypt from "bcrypt";
 
 dotenv.config();
 
+// ✅ HOSTINGER: limpiar URL (quita comillas/espacios/line breaks raros)
+const sanitizeDbUrl = (v = "") =>
+  String(v)
+    .trim()
+    .replace(/^\uFEFF/, "")           // BOM raro
+    .replace(/^['"]|['"]$/g, "")      // comillas al inicio/fin
+    .replace(/\s+/g, "");             // cualquier espacio/salto de línea
+
+const dbUrlRaw =
+  process.env.DATABASE_URL_CLEAN ||
+  process.env.DATABASE_URL ||
+  process.env.DATABASE_URL_FALLBACK ||
+  "";
+
+process.env.DATABASE_URL = sanitizeDbUrl(dbUrlRaw);
+
 // ✅ HOSTINGER FIX: usar URL limpia (evita variables “contaminadas”)
 process.env.DATABASE_URL =
   (process.env.DATABASE_URL_CLEAN || "").trim() ||
@@ -1259,6 +1275,16 @@ app.get("/debug/dburl", (req, res) => {
     ok: true,
     startsWithMysql: v.startsWith("mysql://"),
     prefix: v.slice(0, 10), // muestra "mysql://..."
+    length: v.length,
+  });
+});
+
+app.get("/debug/dburl", (req, res) => {
+  const v = process.env.DATABASE_URL || "";
+  res.json({
+    ok: true,
+    startsWithMysql: v.startsWith("mysql://"),
+    prefix10: v.slice(0, 10),
     length: v.length,
   });
 });
