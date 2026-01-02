@@ -1253,6 +1253,16 @@ app.get("/debug/dburl", (req, res) => {
   });
 });
 
+app.get("/debug/dburl", (req, res) => {
+  const v = process.env.DATABASE_URL || "";
+  res.json({
+    ok: true,
+    startsWithMysql: v.startsWith("mysql://"),
+    prefix: v.slice(0, 10), // muestra "mysql://..."
+    length: v.length,
+  });
+});
+
 /* =========================================================
    Arranque
 ========================================================= */
