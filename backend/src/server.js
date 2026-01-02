@@ -5,7 +5,15 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 
-dotenv.config();
+// 🔥 FORZAR dotenv a leer el .env desde la raíz real del proyecto (no depende del cwd)
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// server.js está en /src, el .env está en la carpeta padre (/)
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 /**
  * ✅ Sanitiza DATABASE_URL para Hostinger / envs raros:
@@ -15,13 +23,13 @@ dotenv.config();
  */
 const sanitizeDbUrl = (v = "") =>
   String(v)
-    .replace(/\uFEFF/g, "")              // BOM
+    .replace(/\uFEFF/g, "") // BOM
     .replace(/[\u200B-\u200D\u2060]/g, "") // zero-width
     .trim()
     .replace(/^['"]|['"]$/g, "")
     .replace(/\s+/g, "");
 
-// ✅ Solo usamos DATABASE_URL (ya corregiste el nombre en Hostinger)
+// ✅ Limpieza final
 process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
 
 // ✅ Logs de diagnóstico (sin filtrar secretos)
@@ -32,22 +40,22 @@ console.log("ENV CHECK:", {
   has_JWT_SECRET: !!process.env.JWT_SECRET,
 });
 
-// ✅ Validaciones mínimas (no tumbes el server si sigues en debug)
+// ✅ Validaciones mínimas
 if (!process.env.JWT_SECRET) {
   console.error("❌ JWT_SECRET no está definida");
 }
 
 if (!process.env.DATABASE_URL?.startsWith("mysql://")) {
   console.error("❌ DATABASE_URL inválida (no empieza con mysql://)");
-  // En producción idealmente sí deberías tumbarlo:
-  // process.exit(1);
+  // producción real: process.exit(1);
 }
 
 // ✅ Prisma Client (MySQL)
 const prisma = new PrismaClient();
 
 // ✅ Intento de conexión (útil para loguear si conecta sin tumbar la app)
-prisma.$connect()
+prisma
+  .$connect()
   .then(() => console.log("✅ DB connected"))
   .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 
