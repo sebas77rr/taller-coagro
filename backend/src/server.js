@@ -1183,6 +1183,57 @@ app.delete(
   }
 );
 
+app.patch("/api/ordenes/:id/reabrir", verificarToken, async (req, res) => {
+  try {
+    const ordenId = Number(req.params.id);
+    if (Number.isNaN(ordenId)) {
+      return res.status(400).json({ error: "ID inválido" });
+    }
+
+    // ✅ Solo roles altos
+    const rol = req.usuario?.rol;
+    const allowed = rol === "ADMIN" || rol === "JEFE_TALLER";
+    if (!allowed) {
+      return res.status(403).json({ error: "No autorizado" });
+    }
+
+    const orden = await prisma.ordenServicio.findUnique({ where: { id: ordenId } });
+    if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
+
+    // ✅ Solo si está cerrada
+    const cerrada = orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
+    if (!cerrada) {
+      return res.status(409).json({ error: "La orden no está cerrada" });
+    }
+
+    const upd = await prisma.ordenServicio.update({
+      where: { id: ordenId },
+      data: { estado: "EN_PROCESO" },
+      include: {
+        tecnicoAsignado: true,
+        cliente: true,
+        equipo: true,
+        sede: true,
+        manoObra: true,
+        repuestos: { include: { repuesto: true } },
+      },
+    });
+
+    await logOrdenEvento({
+      ordenId,
+      tipo: "ORDEN_REABIERTA",
+      detalle: "Reabrió la orden (edición habilitada)",
+      usuarioId: req.usuario?.id,
+    });
+
+    res.json(upd);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Error reabriendo orden" });
+  }
+});
+
+// 
 app.get("/debug/env", (req, res) => {
   res.json({
     NODE_ENV: process.env.NODE_ENV,
@@ -1252,6 +1303,8 @@ app.get("/debug/env-lite", (req, res) => {
     NODE_ENV: process.env.NODE_ENV,
   });
 });
+
+
 
 import mysql from "mysql2/promise";
 
