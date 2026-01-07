@@ -1,19 +1,19 @@
 import express from "express";
-import cors from "cors";
+import cors from "cors"; // (si NO lo usas después, puedes borrarlo)
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import path from "path";
 import fs from "fs";
 import sharp from "sharp";
-import path from "path";
-import fs from "fs";
+import multer from "multer";
+
 // =========================================================
-// 🔥 HOSTINGER BYPASS (GRATIS, ESTABLE)
+// 🔥 HOSTINGER BYPASS (PROD)
 // =========================================================
 const IS_PROD = process.env.NODE_ENV === "production";
 
-// ⛔ Hostinger no inyecta env vars → las definimos aquí
+// ⛔ Si Hostinger no está inyectando env vars, las defines aquí (parche V1)
 if (IS_PROD) {
   process.env.DATABASE_URL =
     "mysql://u799993945_Desarrollador:CoagroDB2026_A1@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
@@ -22,7 +22,7 @@ if (IS_PROD) {
 }
 
 // =========================================================
-// ✅ Sanitización defensiva (por si acaso)
+// ✅ Sanitización defensiva
 // =========================================================
 const sanitizeDbUrl = (v = "") =>
   String(v)
@@ -38,7 +38,7 @@ process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
 console.log("ENV CHECK:", {
   NODE_ENV: process.env.NODE_ENV,
   has_DATABASE_URL: !!process.env.DATABASE_URL,
-  startsWithMysql: process.env.DATABASE_URL.startsWith("mysql://"),
+  startsWithMysql: (process.env.DATABASE_URL || "").startsWith("mysql://"),
   has_JWT_SECRET: !!process.env.JWT_SECRET,
 });
 
@@ -54,19 +54,49 @@ prisma
 
 const app = express();
 
-app.use(
-  "/uploads",
-  require("express").static(path.join(process.cwd(), "uploads"))
-);
+// =========================================================
+// 📦 Static uploads (SIN require, compatible con ESM)
+// =========================================================
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  })
-);
+// =========================================================
+// ✅ CORS estable + Preflight (evita 503/CORS drama)
+// =========================================================
+const ALLOWED_ORIGINS = [
+  "https://greenyellow-ant-906707.hostingersite.com",
+  "https://indigo-lark-430359.hostingersite.com",
+  "http://localhost:5173",
+];
 
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+
+  if (req.method === "OPTIONS") return res.status(204).end();
+  next();
+});
+  
 app.use(express.json());
+
+// =========================================================
+// 📦 Multer (para evidencias)
+// =========================================================
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
+});  
+
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
