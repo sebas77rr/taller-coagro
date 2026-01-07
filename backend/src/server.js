@@ -54,6 +54,14 @@ prisma
 
 const app = express();
 
+app.options("*", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  return res.status(204).end();
+});
+
 // =========================================================
 // 📦 Static uploads (SIN require, compatible con ESM)
 // =========================================================
