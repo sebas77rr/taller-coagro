@@ -3,7 +3,11 @@ import cors from "cors";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
-
+import path from "path";
+import fs from "fs";
+import sharp from "sharp";
+import path from "path";
+import fs from "fs";
 // =========================================================
 // 🔥 HOSTINGER BYPASS (GRATIS, ESTABLE)
 // =========================================================
@@ -49,6 +53,11 @@ prisma
   .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 
 const app = express();
+
+app.use(
+  "/uploads",
+  require("express").static(path.join(process.cwd(), "uploads"))
+);
 
 app.use(
   cors({
@@ -1197,11 +1206,14 @@ app.patch("/api/ordenes/:id/reabrir", verificarToken, async (req, res) => {
       return res.status(403).json({ error: "No autorizado" });
     }
 
-    const orden = await prisma.ordenServicio.findUnique({ where: { id: ordenId } });
+    const orden = await prisma.ordenServicio.findUnique({
+      where: { id: ordenId },
+    });
     if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
 
     // ✅ Solo si está cerrada
-    const cerrada = orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
+    const cerrada =
+      orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
     if (!cerrada) {
       return res.status(409).json({ error: "La orden no está cerrada" });
     }
@@ -1233,7 +1245,163 @@ app.patch("/api/ordenes/:id/reabrir", verificarToken, async (req, res) => {
   }
 });
 
-// 
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function safeExt(mimetype) {
+  if (mimetype === "image/jpeg") return "jpg";
+  if (mimetype === "image/png") return "png";
+  if (mimetype === "image/webp") return "webp";
+  if (mimetype === "video/mp4") return "mp4";
+  if (mimetype === "video/webm") return "webm";
+  return null;
+}
+
+app.post(
+  "/api/ordenes/:ordenId/evidencias",
+  verificarToken,
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      const ordenId = Number(req.params.ordenId);
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ordenId inválido" });
+
+      // Validar orden existe
+      const orden = await prisma.ordenServicio.findUnique({
+        where: { id: ordenId },
+      });
+      if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
+
+      // Bloquear si cerrada (igual que todo lo demás)
+      const cerrada =
+        orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
+      if (cerrada)
+        return res.status(409).json({ error: "Orden cerrada: solo lectura" });
+
+      if (!req.file)
+        return res
+          .status(400)
+          .json({ error: "Archivo requerido (field: file)" });
+
+      const { mimetype, originalname, buffer, size } = req.file;
+      const ext = safeExt(mimetype);
+      if (!ext)
+        return res.status(415).json({ error: "Tipo de archivo no soportado" });
+
+      // Carpetas por orden
+      const dir = path.join(
+        process.cwd(),
+        "uploads",
+        "ordenes",
+        String(ordenId)
+      );
+      ensureDir(dir);
+
+      const now = Date.now();
+      const baseName = `${now}_${Math.random().toString(16).slice(2)}`;
+
+      let tipo = "FOTO";
+      let url = "";
+      let thumbnail = null;
+
+      const isImage = mimetype.startsWith("image/");
+      const isVideo = mimetype.startsWith("video/");
+
+      // Límite extra para videos (por seguridad)
+      if (isVideo && size > 12 * 1024 * 1024) {
+        return res
+          .status(413)
+          .json({ error: "Video demasiado pesado (máx 12MB)" });
+      }
+
+      if (isImage) {
+        tipo = "FOTO";
+
+        // ✅ Compresión pro: resize + webp
+        const outFile = `${baseName}.webp`;
+        const outPath = path.join(dir, outFile);
+
+        await sharp(buffer)
+          .rotate() // respeta EXIF
+          .resize({ width: 1400, withoutEnlargement: true })
+          .webp({ quality: 75 })
+          .toFile(outPath);
+
+        url = `/uploads/ordenes/${ordenId}/${outFile}`;
+      } else if (isVideo) {
+        tipo = "VIDEO";
+
+        // Guardar video tal cual (V1)
+        const outFile = `${baseName}.${ext}`;
+        const outPath = path.join(dir, outFile);
+        fs.writeFileSync(outPath, buffer);
+
+        url = `/uploads/ordenes/${ordenId}/${outFile}`;
+
+        // thumbnail (V1 opcional): por ahora null
+        thumbnail = null;
+      } else {
+        return res.status(415).json({ error: "Archivo no soportado" });
+      }
+
+      // Guardar en DB
+      const evidencia = await prisma.ordenEvidencia.create({
+        data: {
+          ordenId,
+          tipo,
+          url,
+          thumbnail,
+        },
+      });
+
+      // Auditoría
+      await logOrdenEvento({
+        ordenId,
+        tipo: "EVIDENCIA_AGREGADA",
+        detalle: `${
+          tipo === "FOTO" ? "Foto" : "Video"
+        } agregada: ${originalname}`,
+        usuarioId: req.usuario?.id,
+      });
+
+      res.json(evidencia);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Error subiendo evidencia" });
+    }
+  }
+);
+
+app.get(
+  "/api/ordenes/:ordenId/evidencias",
+  verificarToken,
+  async (req, res) => {
+    try {
+      const ordenId = Number(req.params.ordenId);
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ordenId inválido" });
+
+      const orden = await prisma.ordenServicio.findUnique({
+        where: { id: ordenId },
+      });
+      if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
+
+      const items = await prisma.ordenEvidencia.findMany({
+        where: { ordenId },
+        orderBy: { createdAt: "desc" },
+      });
+ 
+      res.json(items);
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Error cargando evidencias" });
+    }
+  }
+);
+
+//
 app.get("/debug/env", (req, res) => {
   res.json({
     NODE_ENV: process.env.NODE_ENV,
@@ -1304,8 +1472,6 @@ app.get("/debug/env-lite", (req, res) => {
   });
 });
 
-
-
 import mysql from "mysql2/promise";
 
 app.get("/debug/mysql", async (req, res) => {
@@ -1319,7 +1485,6 @@ app.get("/debug/mysql", async (req, res) => {
     res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
-
 
 router.get("/_version", (req, res) => {
   res.json({
