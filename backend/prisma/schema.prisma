@@ -1,128 +1,143 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
-}
-
 model Sede {
-  id        Int      @id @default(autoincrement())
+  id        Int             @id @default(autoincrement())
   nombre    String
   tipoSede  TipoSede
   ciudad    String
   direccion String
-  activo    Boolean  @default(true)
-
-  ordenes  OrdenServicio[]
-  usuarios Usuario[]
+  activo    Boolean         @default(true)
+  ordenes   OrdenServicio[]
+  usuarios  Usuario[]
 }
 
 model Usuario {
-  id       Int        @id @default(autoincrement())
-  nombre   String
-  email    String     @unique
-  password String
-  rol      RolUsuario
-  sede     Sede?      @relation(fields: [sedeId], references: [id])
-  sedeId   Int?
-
+  id               Int             @id @default(autoincrement())
+  nombre           String
+  email            String          @unique
+  password         String
+  rol              RolUsuario
+  sedeId           Int?
   ordenesAsignadas OrdenServicio[] @relation("TecnicoOrdenes")
+  sede             Sede?           @relation(fields: [sedeId], references: [id])
+
+  @@index([sedeId], map: "Usuario_sedeId_fkey")
 }
 
 model Cliente {
-  id        Int     @id @default(autoincrement())
+  id        Int             @id @default(autoincrement())
   nombre    String
   documento String?
   telefono  String?
   correo    String?
   empresa   String?
-
-  equipos Equipo[]
-  ordenes OrdenServicio[]
+  equipos   Equipo[]
+  ordenes   OrdenServicio[]
 }
 
 model Equipo {
-  id          Int     @id @default(autoincrement())
-  cliente     Cliente @relation(fields: [clienteId], references: [id])
+  id          Int             @id @default(autoincrement())
   clienteId   Int
   marca       String
   modelo      String
   serial      String
   descripcion String?
+  cliente     Cliente         @relation(fields: [clienteId], references: [id])
+  ordenes     OrdenServicio[]
 
-  ordenes OrdenServicio[]
+  @@index([clienteId], map: "Equipo_clienteId_fkey")
 }
 
 model OrdenServicio {
-  id        Int     @id @default(autoincrement())
-  codigo    String  @unique
-  sede      Sede    @relation(fields: [sedeId], references: [id])
-  sedeId    Int
-  cliente   Cliente @relation(fields: [clienteId], references: [id])
-  clienteId Int
-  equipo    Equipo  @relation(fields: [equipoId], references: [id])
-  equipoId  Int
-
-  tipoIngreso   TipoIngreso
-  motivoIngreso String
-  estado        EstadoOrden @default(ABIERTA)
-  fechaIngreso  DateTime    @default(now())
-  fechaSalida   DateTime?
-
-  tecnicoAsignado Usuario? @relation("TecnicoOrdenes", fields: [tecnicoId], references: [id])
+  id              Int              @id @default(autoincrement())
+  codigo          String           @unique
+  sedeId          Int
+  clienteId       Int
+  equipoId        Int
+  tipoIngreso     TipoIngreso
+  motivoIngreso   String
+  estado          EstadoOrden      @default(ABIERTA)
+  fechaIngreso    DateTime         @default(now())
+  fechaSalida     DateTime?
   tecnicoId       Int?
+  eventos         OrdenEvento[]
+  ordenEvidencias OrdenEvidencia[]
+  manoObra        OrdenManoObra[]
+  repuestos       OrdenRepuesto[]
+  cliente         Cliente          @relation(fields: [clienteId], references: [id])
+  equipo          Equipo           @relation(fields: [equipoId], references: [id])
+  sede            Sede             @relation(fields: [sedeId], references: [id])
+  tecnicoAsignado Usuario?         @relation("TecnicoOrdenes", fields: [tecnicoId], references: [id])
 
-  manoObra  OrdenManoObra[]
-  repuestos OrdenRepuesto[]
-
-  eventos OrdenEvento[]
+  @@index([clienteId], map: "OrdenServicio_clienteId_fkey")
+  @@index([equipoId], map: "OrdenServicio_equipoId_fkey")
+  @@index([sedeId], map: "OrdenServicio_sedeId_fkey")
+  @@index([tecnicoId], map: "OrdenServicio_tecnicoId_fkey")
 }
 
 model OrdenManoObra {
-  id      Int           @id @default(autoincrement())
-  orden   OrdenServicio @relation(fields: [ordenId], references: [id])
-  ordenId Int
-
+  id                 Int           @id @default(autoincrement())
+  ordenId            Int
   descripcionTrabajo String
   horas              Float
   costoHora          Float
   subtotal           Float
+  orden              OrdenServicio @relation(fields: [ordenId], references: [id])
+
+  @@index([ordenId], map: "OrdenManoObra_ordenId_fkey")
 }
 
 model Repuesto {
-  id          Int    @id @default(autoincrement())
-  codigo      String @unique
+  id          Int             @id @default(autoincrement())
+  codigo      String          @unique
   descripcion String
   costo       Float
-  stockGlobal Int    @default(0)
-
+  stockGlobal Int             @default(0)
   movimientos OrdenRepuesto[]
 }
 
 model OrdenRepuesto {
-  id         Int           @id @default(autoincrement())
-  orden      OrdenServicio @relation(fields: [ordenId], references: [id])
-  ordenId    Int
-  repuesto   Repuesto      @relation(fields: [repuestoId], references: [id])
-  repuestoId Int
-
+  id            Int           @id @default(autoincrement())
+  ordenId       Int
+  repuestoId    Int
   cantidad      Int
   costoUnitario Float
-  esGarantia    Boolean @default(false)
+  esGarantia    Boolean       @default(false)
   subtotal      Float
-}  
+  orden         OrdenServicio @relation(fields: [ordenId], references: [id])
+  repuesto      Repuesto      @relation(fields: [repuestoId], references: [id])
+
+  @@index([ordenId], map: "OrdenRepuesto_ordenId_fkey")
+  @@index([repuestoId], map: "OrdenRepuesto_repuestoId_fkey")
+}
+
+model OrdenEvidencia {
+  id        Int           @id @default(autoincrement())
+  ordenId   Int
+  tipo      EvidenciaTipo
+  url       String
+  thumbnail String?
+  createdAt DateTime      @default(now())
+  orden     OrdenServicio @relation(fields: [ordenId], references: [id], onDelete: Cascade)
+
+  @@index([ordenId])
+}
 
 model OrdenEvento {
-  id      Int           @id @default(autoincrement())
-  orden   OrdenServicio @relation(fields: [ordenId], references: [id])
-  ordenId Int
-
+  id        Int           @id @default(autoincrement())
+  ordenId   Int
   tipo      String
   detalle   String?
-  usuarioId Int?   
-  createdAt DateTime @default(now())
+  usuarioId Int?
+  createdAt DateTime      @default(now())
+  orden     OrdenServicio @relation(fields: [ordenId], references: [id])
 
   @@index([ordenId])
   @@index([createdAt])
@@ -151,4 +166,9 @@ enum EstadoOrden {
   ESPERANDO_REPUESTO
   FINALIZADA
   ENTREGADA
+}
+
+enum EvidenciaTipo {
+  FOTO
+  VIDEO
 }

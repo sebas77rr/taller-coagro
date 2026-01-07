@@ -1321,13 +1321,12 @@ app.get("/debug/mysql", async (req, res) => {
 });
 
 
-app.get("/api/_version", (req, res) => {
+router.get("/_version", (req, res) => {
   res.json({
     ok: true,
     ts: new Date().toISOString(),
   });
 });
-
 /* =========================================================
    Arranque
 ========================================================= */
