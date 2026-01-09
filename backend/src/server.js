@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import path from "path";
 import fs from "fs";
-import sharp from "sharp";
+// import sharp from "sharp";
 import multer from "multer";
 
 // =========================================================
@@ -58,7 +58,10 @@ app.options("*", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
   return res.status(204).end();
 });
 
@@ -94,7 +97,7 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.status(204).end();
   next();
 });
-  
+
 app.use(express.json());
 
 // =========================================================
@@ -103,7 +106,7 @@ app.use(express.json());
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
-});  
+});
 
 /* =========================================================
    Helpers: Eventos (auditoría)
@@ -1356,16 +1359,9 @@ app.post(
 
       if (isImage) {
         tipo = "FOTO";
-
-        // ✅ Compresión pro: resize + webp
-        const outFile = `${baseName}.webp`;
+        const outFile = `${baseName}.${ext}`;
         const outPath = path.join(dir, outFile);
-
-        await sharp(buffer)
-          .rotate() // respeta EXIF
-          .resize({ width: 1400, withoutEnlargement: true })
-          .webp({ quality: 75 })
-          .toFile(outPath);
+        fs.writeFileSync(outPath, buffer);
 
         url = `/uploads/ordenes/${ordenId}/${outFile}`;
       } else if (isVideo) {
@@ -1430,7 +1426,7 @@ app.get(
         where: { ordenId },
         orderBy: { createdAt: "desc" },
       });
- 
+
       res.json(items);
     } catch (e) {
       console.error(e);
@@ -1524,12 +1520,6 @@ app.get("/debug/mysql", async (req, res) => {
   }
 });
 
-router.get("/_version", (req, res) => {
-  res.json({
-    ok: true,
-    ts: new Date().toISOString(),
-  });
-});
 /* =========================================================
    Arranque
 ========================================================= */
