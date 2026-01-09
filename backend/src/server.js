@@ -1,11 +1,9 @@
 import express from "express";
-import cors from "cors"; // (si NO lo usas después, puedes borrarlo)
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import path from "path";
 import fs from "fs";
-// import sharp from "sharp";
 import multer from "multer";
 
 // =========================================================
@@ -13,11 +11,9 @@ import multer from "multer";
 // =========================================================
 const IS_PROD = process.env.NODE_ENV === "production";
 
-// ⛔ Si Hostinger no está inyectando env vars, las defines aquí (parche V1)
 if (IS_PROD) {
   process.env.DATABASE_URL =
     "mysql://u799993945_Desarrollador:CoagroDB2026_A1@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
-
   process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
 }
 
@@ -54,24 +50,8 @@ prisma
 
 const app = express();
 
-app.options("*", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-  return res.status(204).end();
-});
-
 // =========================================================
-// 📦 Static uploads (SIN require, compatible con ESM)
-// =========================================================
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
-
-// =========================================================
-// ✅ CORS estable + Preflight (evita 503/CORS drama)
+// ✅ CORS + Preflight (UNA sola implementación, estable)
 // =========================================================
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
@@ -85,20 +65,28 @@ app.use((req, res, next) => {
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
   }
 
-  res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
 
+  // ✅ Responder preflight SIEMPRE (antes de tocar auth/rutas)
   if (req.method === "OPTIONS") return res.status(204).end();
+
   next();
 });
 
+// =========================================================
+// Parsers (incluye fallback para login sin preflight)
+// =========================================================
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// =========================================================
+// 📦 Static uploads
+// =========================================================
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // =========================================================
 // 📦 Multer (para evidencias)
@@ -107,7 +95,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
 });
-
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
