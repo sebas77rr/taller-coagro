@@ -1431,7 +1431,6 @@ app.get(
   }
 );
 
-// DELETE evidencia (DB + archivo)
 app.delete("/api/ordenes/:ordenId/evidencias/:evidenciaId", authMiddleware, async (req, res) => {
   try {
     const ordenId = Number(req.params.ordenId);
@@ -1441,7 +1440,6 @@ app.delete("/api/ordenes/:ordenId/evidencias/:evidenciaId", authMiddleware, asyn
       return res.status(400).json({ error: "Parámetros inválidos" });
     }
 
-    // OJO: cambia "ordenEvidencia" por el nombre real en tu Prisma Client
     const ev = await prisma.ordenEvidencia.findFirst({
       where: { id: evidenciaId, ordenId },
       select: { id: true, url: true },
@@ -1451,14 +1449,18 @@ app.delete("/api/ordenes/:ordenId/evidencias/:evidenciaId", authMiddleware, asyn
 
     await prisma.ordenEvidencia.delete({ where: { id: evidenciaId } });
 
-    // borrar archivo físico (sin tumbar)
+    // ev.url: "/uploads/ordenes/7/archivo.webp"
     if (ev.url) {
       const safeUrl = ev.url.startsWith("/") ? ev.url.slice(1) : ev.url;
+
+      // ✅ apunta directo a tu carpeta uploads (ajusta si tu backend está en /src)
       const filePath = path.resolve(process.cwd(), safeUrl);
 
-      fs.unlink(filePath, (err) => {
-        if (err) console.warn("No se pudo borrar archivo:", filePath, err.message);
-      });
+      try {
+        await fs.promises.unlink(filePath);
+      } catch (err) {
+        console.warn("No se pudo borrar archivo:", filePath, err?.message || err);
+      }
     }
 
     return res.json({ ok: true });
