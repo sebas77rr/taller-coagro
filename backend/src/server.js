@@ -1438,7 +1438,7 @@ app.delete("/api/ordenes/:ordenId/evidencias/:evidenciaId", authMiddleware, asyn
     const evidenciaId = Number(req.params.evidenciaId);
 
     if (!ordenId || !evidenciaId) {
-      return res.status(400).json({ error: "Parámetros inválidos" });
+      return res.status(400).json({ error: "Parámetros inválidos" });  
     }
 
     // 1) Buscar evidencia (verifica que pertenezca a la orden)
