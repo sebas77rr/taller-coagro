@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
@@ -12,9 +13,14 @@ import multer from "multer";
 const IS_PROD = process.env.NODE_ENV === "production";
 
 if (IS_PROD) {
-  process.env.DATABASE_URL =
-    "mysql://u799993945_Desarrollador:CoagroDB2026_A1@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
-  process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL =
+      "mysql://u799993945_Desarrollador:CoagroInternacional2025%2A%2A@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
+  }
+
+  if (!process.env.JWT_SECRET) {
+    process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
+  }
 }
 
 // =========================================================
