@@ -1431,7 +1431,42 @@ app.get(
   }
 );
 
+// DELETE evidencia (DB + archivo)
+app.delete("/api/ordenes/:ordenId/evidencias/:evidenciaId", authMiddleware, async (req, res) => {
+  try {
+    const ordenId = Number(req.params.ordenId);
+    const evidenciaId = Number(req.params.evidenciaId);
 
+    if (!Number.isFinite(ordenId) || !Number.isFinite(evidenciaId)) {
+      return res.status(400).json({ error: "Parámetros inválidos" });
+    }
+
+    // OJO: cambia "ordenEvidencia" por el nombre real en tu Prisma Client
+    const ev = await prisma.ordenEvidencia.findFirst({
+      where: { id: evidenciaId, ordenId },
+      select: { id: true, url: true },
+    });
+
+    if (!ev) return res.status(404).json({ error: "Evidencia no encontrada" });
+
+    await prisma.ordenEvidencia.delete({ where: { id: evidenciaId } });
+
+    // borrar archivo físico (sin tumbar)
+    if (ev.url) {
+      const safeUrl = ev.url.startsWith("/") ? ev.url.slice(1) : ev.url;
+      const filePath = path.resolve(process.cwd(), safeUrl);
+
+      fs.unlink(filePath, (err) => {
+        if (err) console.warn("No se pudo borrar archivo:", filePath, err.message);
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE evidencia error:", e);
+    return res.status(500).json({ error: "Error eliminando evidencia" });
+  }
+});
 
 //
 app.get("/debug/env", (req, res) => {
