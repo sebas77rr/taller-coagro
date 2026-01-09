@@ -75,7 +75,10 @@ app.use((req, res, next) => {
   }
 
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
 
   // ✅ Responder preflight SIEMPRE (antes de tocar auth/rutas)
   if (req.method === "OPTIONS") return res.status(204).end();
@@ -1427,6 +1430,47 @@ app.get(
     }
   }
 );
+
+// DELETE evidencia (DB + archivo)
+app.delete("/api/ordenes/:ordenId/evidencias/:evidenciaId", authMiddleware, async (req, res) => {
+  try {
+    const ordenId = Number(req.params.ordenId);
+    const evidenciaId = Number(req.params.evidenciaId);
+
+    if (!ordenId || !evidenciaId) {
+      return res.status(400).json({ error: "Parámetros inválidos" });
+    }
+
+    // 1) Buscar evidencia (verifica que pertenezca a la orden)
+    const ev = await prisma.ordenEvidencia.findFirst({
+      where: { id: evidenciaId, ordenId },
+    });
+
+    if (!ev) {
+      return res.status(404).json({ error: "Evidencia no encontrada" });
+    }
+
+    // 2) Borrar registro
+    await prisma.ordenEvidencia.delete({ where: { id: evidenciaId } });
+
+    // 3) Borrar archivo físico (si existe)
+    // ev.url suele venir tipo "/uploads/ordenes/7/archivo.webp"
+    if (ev.url) {
+      const safeUrl = ev.url.startsWith("/") ? ev.url.slice(1) : ev.url; // quita "/" inicial
+      const filePath = path.join(process.cwd(), safeUrl);
+
+      fs.unlink(filePath, (err) => {
+        // si no existe, no tumbes la operación
+        if (err) console.warn("No se pudo borrar archivo:", filePath, err.message);
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("DELETE evidencia error:", e);
+    return res.status(500).json({ error: "Error eliminando evidencia" });
+  }
+});
 
 //
 app.get("/debug/env", (req, res) => {
