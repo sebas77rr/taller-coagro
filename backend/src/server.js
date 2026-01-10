@@ -6,6 +6,7 @@ import bcrypt from "bcrypt";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
+import { fileURLToPath } from "url";
 
 // =========================================================
 // 🔥 HOSTINGER BYPASS (PROD)
@@ -22,6 +23,21 @@ if (IS_PROD) {
     process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
   }
 }
+
+// =========================================================
+// 🧭 __dirname real (ESM safe)
+// =========================================================
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// =========================================================
+// 📦 Uploads path FIXO (robusto en prod)
+// server.js está en /src → uploads queda en /uploads
+// =========================================================
+const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
+
+console.log("📦 Static uploads from:", UPLOADS_DIR);
+console.log("UPLOADS exists?", fs.existsSync(UPLOADS_DIR));
 
 // =========================================================
 // ✅ Sanitización defensiva
@@ -57,7 +73,7 @@ prisma
 const app = express();
 
 // =========================================================
-// ✅ CORS + Preflight (UNA sola implementación, estable)
+// ✅ CORS + Preflight
 // =========================================================
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
@@ -80,25 +96,23 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
 
-  // ✅ Responder preflight SIEMPRE (antes de tocar auth/rutas)
   if (req.method === "OPTIONS") return res.status(204).end();
-
   next();
 });
 
 // =========================================================
-// Parsers (incluye fallback para login sin preflight)
+// Parsers
 // =========================================================
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================================================
-// 📦 Static uploads
+// 📦 Static uploads (SERVIR ARCHIVOS)
 // =========================================================
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use("/uploads", express.static(UPLOADS_DIR));
 
 // =========================================================
-// 📦 Multer (para evidencias)
+// 📦 Multer (evidencias)
 // =========================================================
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -1430,7 +1444,6 @@ app.get(
     }
   }
 );
-
 
 //
 app.get("/debug/env", (req, res) => {
