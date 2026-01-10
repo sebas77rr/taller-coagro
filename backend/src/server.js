@@ -107,10 +107,18 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =========================================================
-// 📦 Static uploads (SERVIR ARCHIVOS)
+// 📦 Static uploads (SERVIR ARCHIVOS + CORS)
 // =========================================================
-app.use("/uploads", express.static(UPLOADS_DIR));
-
+app.use(
+  "/uploads",
+  (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Cache-Control", "public, max-age=31536000");
+    next();
+  },
+  express.static(UPLOADS_DIR)
+);
 // =========================================================
 // 📦 Multer (evidencias)
 // =========================================================
