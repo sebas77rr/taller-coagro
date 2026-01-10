@@ -34,7 +34,6 @@ const __dirname = path.dirname(__filename);
 // 📦 Uploads path FIXO (robusto en prod)
 // server.js está en /src → uploads queda en /uploads
 // =========================================================
-const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
 
 console.log("📦 Static uploads from:", UPLOADS_DIR);
 console.log("UPLOADS exists?", fs.existsSync(UPLOADS_DIR));
@@ -105,6 +104,22 @@ app.use((req, res, next) => {
 // =========================================================
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// =========================================================
+// 📦 Static uploads (SERVIR ARCHIVOS + CORS real)
+// =========================================================
+const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+app.use(
+  "/uploads",
+  express.static(UPLOADS_DIR, {
+    setHeaders(res) {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+      res.setHeader("Cache-Control", "public, max-age=31536000");
+    },
+  })
+);
 
 // =========================================================
 // 📦 Static uploads (SERVIR ARCHIVOS + CORS)
