@@ -14,6 +14,10 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// intenta cargar .env desde la raíz del proyecto y desde public_html
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+
 // =========================================================
 // ✅ Sanitización defensiva (DATABASE_URL) + fallback Hostinger
 // =========================================================
