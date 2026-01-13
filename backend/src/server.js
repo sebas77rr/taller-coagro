@@ -9,22 +9,6 @@ import multer from "multer";
 import { fileURLToPath } from "url";
 
 // =========================================================
-// 🔥 HOSTINGER BYPASS (PROD)
-// =========================================================
-const IS_PROD = process.env.NODE_ENV === "production";
-
-if (IS_PROD) {
-  if (!process.env.DATABASE_URL) {
-    process.env.DATABASE_URL =
-      "mysql://u799993945_Desarrollador:CoagroInternacional2025%2A%2A@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
-  }
-
-  if (!process.env.JWT_SECRET) {
-    process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
-  }
-}
-
-// =========================================================
 // 🧭 __dirname real (ESM safe)
 // =========================================================
 const __filename = fileURLToPath(import.meta.url);
@@ -42,13 +26,12 @@ const sanitizeDbUrl = (v = "") =>
 process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
 
 // =========================================================
-// 📦 Uploads path FIXO (robusto en Hostinger)
-// server.js está en /src → uploads queda en /uploads (nivel raíz del proyecto)
+// 📦 Uploads path robusto
+// server.js está en /src → uploads queda en /uploads (raíz del backend)
 // =========================================================
 const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
 const UPLOADS_ORDENES_DIR = path.join(UPLOADS_DIR, "ordenes");
 
-// ✅ crear carpetas SIEMPRE (si no existen, las crea)
 try {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
   fs.mkdirSync(UPLOADS_ORDENES_DIR, { recursive: true });
@@ -56,12 +39,15 @@ try {
   console.error("❌ No se pudo crear uploads:", e);
 }
 
-// Logs (para que no adivinemos)
+// =========================================================
+// Logs (para no adivinar)
+// =========================================================
 console.log("ENV CHECK:", {
   NODE_ENV: process.env.NODE_ENV,
   has_DATABASE_URL: !!process.env.DATABASE_URL,
   startsWithMysql: (process.env.DATABASE_URL || "").startsWith("mysql://"),
   has_JWT_SECRET: !!process.env.JWT_SECRET,
+  PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE,
 });
 
 console.log("📦 UPLOADS CHECK:", {
@@ -72,7 +58,7 @@ console.log("📦 UPLOADS CHECK:", {
 });
 
 // =========================================================
-// Prisma
+// Prisma (con manejo de crash)
 // =========================================================
 const prisma = new PrismaClient();
 
@@ -81,10 +67,22 @@ prisma
   .then(() => console.log("✅ DB connected"))
   .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 
-const app = express();
+// Evita que un crash deje el proceso "zombie"
+process.on("unhandledRejection", (err) => {
+  console.error("❌ UnhandledRejection:", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("❌ UncaughtException:", err);
+});
 
 // =========================================================
-// ✅ CORS + Preflight (estable)
+// Express
+// =========================================================
+const app = express();
+app.set("trust proxy", 1);
+
+// =========================================================
+// ✅ CORS + Preflight (ANTES de rutas)
 // =========================================================
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
@@ -98,6 +96,7 @@ app.use((req, res, next) => {
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
+    // Solo pon credentials=true si REALMENTE usas cookies. Si usas JWT en header, no es necesario.
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
 
@@ -107,14 +106,16 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
 
+  // 🔥 Preflight
   if (req.method === "OPTIONS") return res.status(204).end();
+
   next();
 });
 
 // =========================================================
 // Parsers
 // =========================================================
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // =========================================================
@@ -123,18 +124,20 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    // Para imágenes/videos no necesitas credentials → '*' está bien
+    // Para imágenes/videos no necesitas credentials → '*' ok
     res.setHeader("Access-Control-Allow-Origin", "*");
-
-    // Para que Chrome no bloquee recursos cross-origin
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
-
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     next();
   },
-  express.static(UPLOADS_DIR)  
+  express.static(UPLOADS_DIR)
 );
+
+// =========================================================
+// (Opcional) Ping para verificar backend vivo
+// =========================================================
+app.get("/ping", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // =========================================================
 // 📦 Multer (evidencias)
