@@ -15,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // =========================================================
-// ✅ Sanitización defensiva (DATABASE_URL)
+// ✅ Sanitización defensiva (DATABASE_URL) + fallback Hostinger
 // =========================================================
 const sanitizeDbUrl = (v = "") =>
   String(v)
@@ -23,7 +23,15 @@ const sanitizeDbUrl = (v = "") =>
     .replace(/^['"]|['"]$/g, "")
     .replace(/\s+/g, "");
 
-process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
+// Hostinger: a veces queda como DATABASE_URL_ o no aplica bien vars
+const RAW_DB =
+  process.env.DATABASE_URL ||
+  process.env.DATABASE_URL_ ||
+  process.env.DATABASE_URL_FALLBACK ||
+  "";
+
+// Set final
+process.env.DATABASE_URL = sanitizeDbUrl(RAW_DB);
 
 // =========================================================
 // 📦 Uploads path robusto
@@ -42,30 +50,44 @@ try {
 // =========================================================
 // Logs (para no adivinar)
 // =========================================================
-console.log("ENV CHECK:", {
-  NODE_ENV: process.env.NODE_ENV,
-  has_DATABASE_URL: !!process.env.DATABASE_URL,
-  startsWithMysql: (process.env.DATABASE_URL || "").startsWith("mysql://"),
-  has_JWT_SECRET: !!process.env.JWT_SECRET,
-  PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE,
-});
+const envReport = () => {
+  const v = process.env.DATABASE_URL || "";
+  return {
+    NODE_ENV: process.env.NODE_ENV || null,
+    PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE || null,
+    has_DATABASE_URL: !!v,
+    DATABASE_URL_len: v.length,
+    DATABASE_URL_preview: v ? v.slice(0, 12) + "..." : null,
+    has_DATABASE_URL_: !!process.env.DATABASE_URL_,
+    has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
+    has_JWT_SECRET: !!process.env.JWT_SECRET,
+    cwd: process.cwd(),
+    UPLOADS_DIR,
+    uploadsExists: fs.existsSync(UPLOADS_DIR),
+    ordenesDir: UPLOADS_ORDENES_DIR,
+    ordenesExists: fs.existsSync(UPLOADS_ORDENES_DIR),
+  };
+};
 
-console.log("📦 UPLOADS CHECK:", {
-  UPLOADS_DIR,
-  exists: fs.existsSync(UPLOADS_DIR),
-  UPLOADS_ORDENES_DIR,
-  ordenesExists: fs.existsSync(UPLOADS_ORDENES_DIR),
-});
+console.log("ENV CHECK:", envReport());
 
 // =========================================================
-// Prisma (con manejo de crash)
+// Prisma (solo si hay DATABASE_URL)
 // =========================================================
-const prisma = new PrismaClient();
+let prisma = null;
 
-prisma
-  .$connect()
-  .then(() => console.log("✅ DB connected"))
-  .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
+if (process.env.DATABASE_URL) {
+  prisma = new PrismaClient();
+
+  prisma
+    .$connect()
+    .then(() => console.log("✅ DB connected"))
+    .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
+} else {
+  console.error(
+    "❌ DATABASE_URL está vacío. Revisa Hostinger env vars: DATABASE_URL (sin _)."
+  );
+}
 
 // Evita que un crash deje el proceso "zombie"
 process.on("unhandledRejection", (err) => {
@@ -96,7 +118,6 @@ app.use((req, res, next) => {
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
-    // Solo pon credentials=true si REALMENTE usas cookies. Si usas JWT en header, no es necesario.
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
 
@@ -106,9 +127,7 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
 
-  // 🔥 Preflight
   if (req.method === "OPTIONS") return res.status(204).end();
-
   next();
 });
 
@@ -124,7 +143,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    // Para imágenes/videos no necesitas credentials → '*' ok
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
@@ -133,6 +151,11 @@ app.use(
   },
   express.static(UPLOADS_DIR)
 );
+
+// =========================================================
+// ✅ Debug real del entorno (producción)
+// =========================================================
+app.get("/__envcheck", (req, res) => res.json(envReport()));
 
 // =========================================================
 // (Opcional) Ping para verificar backend vivo
@@ -146,12 +169,14 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
 });
+
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
 
 async function logOrdenEvento({ ordenId, tipo, detalle, usuarioId }) {
   try {
+    if (!prisma) return; // si no hay DB, no loguea eventos
     await prisma.ordenEvento.create({
       data: {
         ordenId,
@@ -170,6 +195,15 @@ async function logOrdenEvento({ ordenId, tipo, detalle, usuarioId }) {
 ========================================================= */
 
 const verificarToken = (req, res, next) => {
+  // ✅ Guard pro: si Prisma no está listo, no ejecutes rutas con DB
+  if (!prisma) {
+    return res.status(500).json({
+      error: "DB no disponible",
+      detail:
+        "Prisma no inicializó (DATABASE_URL vacío o inválido). Revisa /__envcheck y variables en Hostinger.",
+    });
+  }
+
   const authHeader = req.headers["authorization"];
 
   if (!authHeader) {
@@ -177,7 +211,7 @@ const verificarToken = (req, res, next) => {
   }
 
   const token = authHeader.split(" ")[1];
-
+   
   if (!token) {
     return res.status(401).json({ error: "Token inválido" });
   }
@@ -224,6 +258,15 @@ app.get("/api/health", (req, res) => {
 // LOGIN
 app.post("/api/auth/login", async (req, res) => {
   try {
+    // ✅ Si Prisma no existe, no intentes DB
+    if (!prisma) {
+      return res.status(500).json({
+        error: "DB no configurada",
+        detail:
+          "DATABASE_URL vacío en el proceso Node. Revisa /__envcheck y variables en Hostinger.",
+      });
+    }
+
     const { email, password } = req.body;
 
     if (!email || !password) {
@@ -237,14 +280,12 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(401).json({ error: "Credenciales inválidas" });
     }
 
-    // ✅ Evita 500 por password null/undefined
     if (!usuario.password) {
       return res.status(500).json({
         error: "Usuario sin password en BD (null). Revisa el seed/import.",
       });
     }
 
-    // ✅ Evita 500 por password plano (no hasheado)
     if (!usuario.password.startsWith("$2")) {
       return res.status(500).json({
         error:
@@ -283,121 +324,6 @@ app.post("/api/auth/login", async (req, res) => {
       error: "Error en login",
       detail: error?.message || String(error),
     });
-  }
-});
-
-/* =========================================================
-   Rutas: Sedes (protegido)
-========================================================= */
-
-app.get("/api/sedes", verificarToken, async (req, res) => {
-  try {
-    const sedes = await prisma.sede.findMany({
-      where: { activo: true },
-      orderBy: { id: "asc" },
-    });
-    res.json(sedes);
-  } catch (error) {
-    console.error("Error listando sedes:", error);
-    res.status(500).json({ error: "Error listando sedes" });
-  }
-});
-
-/* =========================================================
-   Rutas: Clientes
-========================================================= */
-
-// Listar + search
-app.get("/api/clientes", verificarToken, async (req, res) => {
-  try {
-    const search = (req.query.search || "").toString().trim();
-
-    const where = search
-      ? {
-          OR: [
-            { nombre: { contains: search, mode: "insensitive" } },
-            { telefono: { contains: search, mode: "insensitive" } },
-            { documento: { contains: search, mode: "insensitive" } },
-            { correo: { contains: search, mode: "insensitive" } },
-            { empresa: { contains: search, mode: "insensitive" } },
-          ],
-        }
-      : undefined;
-
-    const clientes = await prisma.cliente.findMany({
-      where,
-      orderBy: { nombre: "asc" },
-      take: search ? 20 : 200,
-    });
-
-    res.json(clientes);
-  } catch (error) {
-    console.error("Error listando clientes:", error);
-    res.status(500).json({ error: "Error listando clientes" });
-  }
-});
-
-// Crear cliente (ADMIN / JEFE_TALLER)
-app.post(
-  "/api/clientes",
-  verificarToken,
-  soloAdminOJefeTaller,
-  async (req, res) => {
-    try {
-      const { nombre, documento, telefono, correo, empresa } = req.body;
-
-      if (!nombre || String(nombre).trim().length < 3) {
-        return res.status(400).json({ error: "nombre es obligatorio (mín 3)" });
-      }
-
-      // Control duplicados: documento/telefono/correo
-      const or = [];
-      if (documento) or.push({ documento: String(documento).trim() });
-      if (telefono) or.push({ telefono: String(telefono).trim() });
-      if (correo) or.push({ correo: String(correo).trim() });
-
-      if (or.length > 0) {
-        const existe = await prisma.cliente.findFirst({ where: { OR: or } });
-        if (existe) {
-          return res
-            .status(409)
-            .json({ error: "Cliente ya existe", cliente: existe });
-        }
-      }
-
-      const nuevo = await prisma.cliente.create({
-        data: {
-          nombre: String(nombre).trim(),
-          documento: documento ? String(documento).trim() : null,
-          telefono: telefono ? String(telefono).trim() : null,
-          correo: correo ? String(correo).trim() : null,
-          empresa: empresa ? String(empresa).trim() : null,
-        },
-      });
-
-      res.status(201).json(nuevo);
-    } catch (error) {
-      console.error("Error creando cliente:", error);
-      res.status(500).json({ error: "Error creando cliente" });
-    }
-  }
-);
-
-/* =========================================================
-   Rutas: Equipos
-========================================================= */
-
-// Listar equipos
-app.get("/api/equipos", verificarToken, async (req, res) => {
-  try {
-    const equipos = await prisma.equipo.findMany({
-      include: { cliente: true },
-      orderBy: { id: "asc" },
-    });
-    res.json(equipos);
-  } catch (error) {
-    console.error("Error listando equipos:", error);
-    res.status(500).json({ error: "Error listando equipos" });
   }
 });
 
@@ -775,9 +701,14 @@ app.post("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
 });
 
 async function assertOrdenEditable(ordenId) {
+  if (!prisma) {
+    return { ok: false, status: 500, error: "DB no disponible (Prisma null)" };
+  }
+
   const orden = await prisma.ordenServicio.findUnique({
     where: { id: ordenId },
   });
+
   if (!orden) return { ok: false, status: 404, error: "Orden no encontrada" };
 
   const cerrada = orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
@@ -1580,8 +1511,8 @@ app.get("/__envcheck", (req, res) => {
     cwd: process.cwd(),
   });
 });
- 
-/* =========================================================
+
+/* =========================================  ================
    Arranque
 ========================================================= */
 
