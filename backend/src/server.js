@@ -31,16 +31,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // =========================================================
-// 📦 Uploads path FIXO (robusto en prod)
-// server.js está en /src → uploads queda en /uploads
-// =========================================================
-const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
-
-console.log("📦 Static uploads from:", UPLOADS_DIR);
-console.log("UPLOADS exists?", fs.existsSync(UPLOADS_DIR));
-
-// =========================================================
-// ✅ Sanitización defensiva
+// ✅ Sanitización defensiva (DATABASE_URL)
 // =========================================================
 const sanitizeDbUrl = (v = "") =>
   String(v)
@@ -51,13 +42,33 @@ const sanitizeDbUrl = (v = "") =>
 process.env.DATABASE_URL = sanitizeDbUrl(process.env.DATABASE_URL || "");
 
 // =========================================================
-// Logs de confirmación
+// 📦 Uploads path FIXO (robusto en Hostinger)
+// server.js está en /src → uploads queda en /uploads (nivel raíz del proyecto)
 // =========================================================
+const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
+const UPLOADS_ORDENES_DIR = path.join(UPLOADS_DIR, "ordenes");
+
+// ✅ crear carpetas SIEMPRE (si no existen, las crea)
+try {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  fs.mkdirSync(UPLOADS_ORDENES_DIR, { recursive: true });
+} catch (e) {
+  console.error("❌ No se pudo crear uploads:", e);
+}
+
+// Logs (para que no adivinemos)
 console.log("ENV CHECK:", {
   NODE_ENV: process.env.NODE_ENV,
   has_DATABASE_URL: !!process.env.DATABASE_URL,
   startsWithMysql: (process.env.DATABASE_URL || "").startsWith("mysql://"),
   has_JWT_SECRET: !!process.env.JWT_SECRET,
+});
+
+console.log("📦 UPLOADS CHECK:", {
+  UPLOADS_DIR,
+  exists: fs.existsSync(UPLOADS_DIR),
+  UPLOADS_ORDENES_DIR,
+  ordenesExists: fs.existsSync(UPLOADS_ORDENES_DIR),
 });
 
 // =========================================================
@@ -73,7 +84,7 @@ prisma
 const app = express();
 
 // =========================================================
-// ✅ CORS + Preflight
+// ✅ CORS + Preflight (estable)
 // =========================================================
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
@@ -106,21 +117,25 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-
-
 // =========================================================
-// 📦 Static uploads (SERVIR ARCHIVOS + CORS)
+// 📦 Static uploads (SERVIR ARCHIVOS + evitar ORB)
 // =========================================================
 app.use(
   "/uploads",
   (req, res, next) => {
+    // Para imágenes/videos no necesitas credentials → '*' está bien
     res.setHeader("Access-Control-Allow-Origin", "*");
+
+    // Para que Chrome no bloquee recursos cross-origin
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("Cache-Control", "public, max-age=31536000");
+    res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     next();
   },
-  express.static(UPLOADS_DIR)
+  express.static(UPLOADS_DIR)  
 );
+
 // =========================================================
 // 📦 Multer (evidencias)
 // =========================================================
