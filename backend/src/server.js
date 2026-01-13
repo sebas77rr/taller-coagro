@@ -1516,11 +1516,11 @@ app.get("/__envcheck", (req, res) => {
   });
 });
 
-/* =========================================  ================
-   Arranque
+/* =========================================================
+   Arranque (Hostinger / Prod Ready)
 ========================================================= */
 
-const PORT = process.env.PORT || 4000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Healthcheck principal
 app.get("/", (req, res) => {
@@ -1532,6 +1532,6 @@ app.get("/whoami", (req, res) => {
   res.send("SERVER.JS ACTIVO ✅");
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 API Taller Coagro corriendo en puerto ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 API Taller Coagro corriendo en http://0.0.0.0:${PORT}`);
 });
