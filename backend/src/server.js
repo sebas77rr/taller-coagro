@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
@@ -8,39 +8,39 @@ import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
 
-// =========================================================
-// 🧭 __dirname real (ESM safe)
-// =========================================================
+// ---------------------------------------------------------
+// __dirname real (ESM safe)
+// ---------------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// intenta cargar .env desde la raíz del proyecto y desde public_html
+// ---------------------------------------------------------
+// Cargar .env desde rutas posibles (Hostinger cambia cwd)
+// ---------------------------------------------------------
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config();
 
-// =========================================================
-// ✅ Sanitización defensiva (DATABASE_URL) + fallback Hostinger
-// =========================================================
+// ---------------------------------------------------------
+// Sanitización defensiva + fallback Hostinger
+// ---------------------------------------------------------
 const sanitizeDbUrl = (v = "") =>
   String(v)
     .trim()
     .replace(/^['"]|['"]$/g, "")
     .replace(/\s+/g, "");
 
-// Hostinger: a veces queda como DATABASE_URL_ o no aplica bien vars
 const RAW_DB =
   process.env.DATABASE_URL ||
   process.env.DATABASE_URL_ ||
   process.env.DATABASE_URL_FALLBACK ||
   "";
 
-// Set final
 process.env.DATABASE_URL = sanitizeDbUrl(RAW_DB);
 
-// =========================================================
-// 📦 Uploads path robusto
-// server.js está en /src → uploads queda en /uploads (raíz del backend)
-// =========================================================
+// ---------------------------------------------------------
+// Uploads (server.js en /src → uploads en /uploads)
+// ---------------------------------------------------------
 const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
 const UPLOADS_ORDENES_DIR = path.join(UPLOADS_DIR, "ordenes");
 
@@ -51,9 +51,9 @@ try {
   console.error("❌ No se pudo crear uploads:", e);
 }
 
-// =========================================================
-// Logs (para no adivinar)
-// =========================================================
+// ---------------------------------------------------------
+// Reporte de entorno (debug real en prod)
+// ---------------------------------------------------------
 const envReport = () => {
   const v = process.env.DATABASE_URL || "";
   return {
@@ -75,41 +75,40 @@ const envReport = () => {
 
 console.log("ENV CHECK:", envReport());
 
-// =========================================================
-// Prisma (solo si hay DATABASE_URL)
-// =========================================================
+// ---------------------------------------------------------
+// Prisma (NO mata el proceso si no hay DB)
+// ---------------------------------------------------------
 let prisma = null;
 
 if (process.env.DATABASE_URL) {
   prisma = new PrismaClient();
-
   prisma
     .$connect()
     .then(() => console.log("✅ DB connected"))
     .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
 } else {
   console.error(
-    "❌ DATABASE_URL está vacío. Revisa Hostinger env vars: DATABASE_URL (sin _)."
+    "❌ DATABASE_URL vacío. El backend arrancará sin DB (modo degradado)."
   );
 }
 
-// Evita que un crash deje el proceso "zombie"
-process.on("unhandledRejection", (err) => {
-  console.error("❌ UnhandledRejection:", err);
-});
-process.on("uncaughtException", (err) => {
-  console.error("❌ UncaughtException:", err);
-});
+// Evita procesos zombie
+process.on("unhandledRejection", (err) =>
+  console.error("❌ UnhandledRejection:", err)
+);
+process.on("uncaughtException", (err) =>
+  console.error("❌ UncaughtException:", err)
+);
 
-// =========================================================
-// Express
-// =========================================================
+// ---------------------------------------------------------
+// Express base
+// ---------------------------------------------------------
 const app = express();
 app.set("trust proxy", 1);
 
-// =========================================================
-// ✅ CORS + Preflight (ANTES de rutas)
-// =========================================================
+// ---------------------------------------------------------
+// CORS + Preflight (antes de rutas)
+// ---------------------------------------------------------
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
   "https://indigo-lark-430359.hostingersite.com",
@@ -135,15 +134,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// =========================================================
+// ---------------------------------------------------------
 // Parsers
-// =========================================================
+// ---------------------------------------------------------
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// =========================================================
-// 📦 Static uploads (SERVIR ARCHIVOS + evitar ORB)
-// =========================================================
+// ---------------------------------------------------------
+// Static uploads (evita ORB)
+// ---------------------------------------------------------
 app.use(
   "/uploads",
   (req, res, next) => {
@@ -156,22 +155,22 @@ app.use(
   express.static(UPLOADS_DIR)
 );
 
-// =========================================================
-// ✅ Debug real del entorno (producción)
-// =========================================================
+// ---------------------------------------------------------
+// Debug & Health
+// ---------------------------------------------------------
 app.get("/__envcheck", (req, res) => res.json(envReport()));
-
-// =========================================================
-// (Opcional) Ping para verificar backend vivo
-// =========================================================
 app.get("/ping", (req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get("/", (req, res) =>
+  res.json({ ok: true, message: "API Taller Coagro online" })
+);
+app.get("/whoami", (req, res) => res.send("SERVER.JS ACTIVO ✅"));
 
-// =========================================================
-// 📦 Multer (evidencias)
-// =========================================================
+// ---------------------------------------------------------
+// Multer (evidencias)
+// ---------------------------------------------------------
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024 }, // 12MB
+  limits: { fileSize: 12 * 1024 * 1024 },
 });
 
 /* =========================================================
@@ -215,7 +214,7 @@ const verificarToken = (req, res, next) => {
   }
 
   const token = authHeader.split(" ")[1];
-   
+
   if (!token) {
     return res.status(401).json({ error: "Token inválido" });
   }
