@@ -1568,6 +1568,19 @@ app.get("/__debug_uploads", (req, res) => {
   });
 });
 
+app.get("/__envcheck", (req, res) => {
+  const raw = process.env.DATABASE_URL || "";
+  res.json({
+    NODE_ENV: process.env.NODE_ENV || null,
+    has_DATABASE_URL: !!raw,
+    DATABASE_URL_len: raw.length,
+    DATABASE_URL_preview: raw ? raw.slice(0, 12) + "..." : null,
+    has_JWT_SECRET: !!process.env.JWT_SECRET,
+    PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE || null,
+    cwd: process.cwd(),
+  });
+});
+ 
 /* =========================================================
    Arranque
 ========================================================= */
