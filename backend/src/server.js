@@ -1540,6 +1540,16 @@ app.get("/debug/mysql", async (req, res) => {
   }
 });
 
+app.get("/__debug_uploads", (req, res) => {
+  res.json({
+    cwd: process.cwd(),
+    UPLOADS_DIR,
+    exists: fs.existsSync(UPLOADS_DIR),
+    ordenesDir: path.join(UPLOADS_DIR, "ordenes"),
+    ordenesExists: fs.existsSync(path.join(UPLOADS_DIR, "ordenes")),
+  });
+});
+
 /* =========================================================
    Arranque
 ========================================================= */
