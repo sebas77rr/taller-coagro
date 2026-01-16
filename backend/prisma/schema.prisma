@@ -1,13 +1,12 @@
 generator client {
   provider   = "prisma-client-js"
-  engineType = env("PRISMA_CLIENT_ENGINE_TYPE")
+  engineType = "binary"
 }
 
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
-}
-
+}    
 
 model Sede {
   id        Int             @id @default(autoincrement())
