@@ -22,21 +22,50 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config();
 
 // ---------------------------------------------------------
-// Sanitización defensiva + fallback Hostinger
+// Sanitización defensiva
 // ---------------------------------------------------------
 const sanitizeDbUrl = (v = "") =>
   String(v)
     .trim()
-    .replace(/^['"]|['"]$/g, "")
-    .replace(/\s+/g, "");
+    .replace(/^['"]|['"]$/g, "") // quita comillas al inicio/fin
+    .replace(/\s+/g, "");        // quita espacios
 
-const RAW_DB =
+// ---------------------------------------------------------
+// 🔥 HACK DE GUERRA (Hostinger PROD)
+// Si Hostinger NO inyecta env vars, forzamos valores en producción.
+// ---------------------------------------------------------
+const IS_PROD =
+  process.env.NODE_ENV === "production" ||
+  process.env.NODE_ENV === "prod" ||
+  process.env.HOSTINGER === "1";
+
+// Si viene vacío o con comillas/espacios, lo normalizamos primero
+const RAW_DB_FROM_ENV =
   process.env.DATABASE_URL ||
   process.env.DATABASE_URL_ ||
   process.env.DATABASE_URL_FALLBACK ||
   "";
 
-process.env.DATABASE_URL = sanitizeDbUrl(RAW_DB);
+process.env.DATABASE_URL = sanitizeDbUrl(RAW_DB_FROM_ENV);
+
+// Si en PROD sigue vacío → fallback hardcodeado (tu URL)
+if (IS_PROD && !process.env.DATABASE_URL) {
+  process.env.DATABASE_URL =
+    "mysql://u799993945_Desarrollador:CoagroInternacional2025%2A%2A@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
+}
+
+// JWT_SECRET fallback en PROD
+if (IS_PROD && !process.env.JWT_SECRET) {
+  process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
+}
+
+// Asegura engine type en PROD (ayuda a Hostinger/Prisma)
+if (IS_PROD && !process.env.PRISMA_CLIENT_ENGINE_TYPE) {
+  process.env.PRISMA_CLIENT_ENGINE_TYPE = "binary";
+}
+
+// Si NODE_ENV no viene, lo fijamos (sin pisar si ya existe)
+if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
 
 // ---------------------------------------------------------
 // Uploads (server.js en /src → uploads en /uploads)
@@ -61,15 +90,15 @@ const envReport = () => {
     PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE || null,
     has_DATABASE_URL: !!v,
     DATABASE_URL_len: v.length,
-    DATABASE_URL_preview: v ? v.slice(0, 12) + "..." : null,
-    has_DATABASE_URL_: !!process.env.DATABASE_URL_,
-    has_DATABASE_URL_FALLBACK: !!process.env.DATABASE_URL_FALLBACK,
+    DATABASE_URL_preview: v ? v.slice(0, 18) + "..." : null,
     has_JWT_SECRET: !!process.env.JWT_SECRET,
     cwd: process.cwd(),
+    __dirname,
     UPLOADS_DIR,
     uploadsExists: fs.existsSync(UPLOADS_DIR),
     ordenesDir: UPLOADS_ORDENES_DIR,
     ordenesExists: fs.existsSync(UPLOADS_ORDENES_DIR),
+    isProdBypass: IS_PROD,
   };
 };
 
@@ -171,7 +200,7 @@ app.get("/whoami", (req, res) => res.send("SERVER.JS ACTIVO ✅"));
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 },
-});
+});   
 
 /* =========================================================
    Helpers: Eventos (auditoría)
