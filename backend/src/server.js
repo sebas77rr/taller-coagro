@@ -1544,6 +1544,16 @@ app.get("/__envcheck", (req, res) => {
   });
 });
 
+app.get("/dbcheck", async (req, res) => {
+  try {
+    await prisma.$connect();
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, db: "up" });
+  } catch (e) {
+    res.status(500).json({ ok: false, db: "down", error: e?.message || String(e) });
+  }
+});
+
 /* =========================================================
    Arranque (Hostinger / Prod Ready)
 ========================================================= */
