@@ -22,50 +22,28 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config();
 
 // ---------------------------------------------------------
-// Sanitización defensiva
-// ---------------------------------------------------------
-const sanitizeDbUrl = (v = "") =>
-  String(v)
-    .trim()
-    .replace(/^['"]|['"]$/g, "") // quita comillas al inicio/fin
-    .replace(/\s+/g, "");        // quita espacios
-
-// ---------------------------------------------------------
-// 🔥 HACK DE GUERRA (Hostinger PROD)
-// Si Hostinger NO inyecta env vars, forzamos valores en producción.
+// Entorno
 // ---------------------------------------------------------
 const IS_PROD =
   process.env.NODE_ENV === "production" ||
   process.env.NODE_ENV === "prod" ||
   process.env.HOSTINGER === "1";
 
-// Si viene vacío o con comillas/espacios, lo normalizamos primero
-const RAW_DB_FROM_ENV =
+// Sanitización defensiva
+const sanitize = (v = "") =>
+  String(v)
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\s+/g, "");
+
+process.env.DATABASE_URL = sanitize(
   process.env.DATABASE_URL ||
-  process.env.DATABASE_URL_ ||
-  process.env.DATABASE_URL_FALLBACK ||
-  "";
+    process.env.DATABASE_URL_ ||
+    process.env.DATABASE_URL_FALLBACK ||
+    ""
+);
 
-process.env.DATABASE_URL = sanitizeDbUrl(RAW_DB_FROM_ENV);
-
-// Si en PROD sigue vacío → fallback hardcodeado (tu URL)
-if (IS_PROD && !process.env.DATABASE_URL) {
-  process.env.DATABASE_URL =
-    "mysql://u799993945_Desarrollador:CoagroInternacional2025%2A%2A@auth-db1890.hstgr.io:3306/u799993945_taller_coagro";
-}
-
-// JWT_SECRET fallback en PROD
-if (IS_PROD && !process.env.JWT_SECRET) {
-  process.env.JWT_SECRET = "coagro_taller_super_secreto_2025";
-}
-
-// Asegura engine type en PROD (ayuda a Hostinger/Prisma)
-if (IS_PROD && !process.env.PRISMA_CLIENT_ENGINE_TYPE) {
-  process.env.PRISMA_CLIENT_ENGINE_TYPE = "binary";
-}
-
-// Si NODE_ENV no viene, lo fijamos (sin pisar si ya existe)
-if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
+process.env.JWT_SECRET = sanitize(process.env.JWT_SECRET || "");
 
 // ---------------------------------------------------------
 // Uploads (server.js en /src → uploads en /uploads)
@@ -81,16 +59,16 @@ try {
 }
 
 // ---------------------------------------------------------
-// Reporte de entorno (debug real en prod)
+// Reporte de entorno (debug real)
 // ---------------------------------------------------------
 const envReport = () => {
   const v = process.env.DATABASE_URL || "";
   return {
     NODE_ENV: process.env.NODE_ENV || null,
-    PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE || null,
+    isProd: IS_PROD,
     has_DATABASE_URL: !!v,
     DATABASE_URL_len: v.length,
-    DATABASE_URL_preview: v ? v.slice(0, 18) + "..." : null,
+    DATABASE_URL_preview: v ? v.slice(0, 12) + "..." : null,
     has_JWT_SECRET: !!process.env.JWT_SECRET,
     cwd: process.cwd(),
     __dirname,
@@ -98,36 +76,65 @@ const envReport = () => {
     uploadsExists: fs.existsSync(UPLOADS_DIR),
     ordenesDir: UPLOADS_ORDENES_DIR,
     ordenesExists: fs.existsSync(UPLOADS_ORDENES_DIR),
-    isProdBypass: IS_PROD,
   };
 };
 
 console.log("ENV CHECK:", envReport());
 
 // ---------------------------------------------------------
-// Prisma (NO mata el proceso si no hay DB)
+// Prisma: conexión única (sin reconectar en cada request)
 // ---------------------------------------------------------
 let prisma = null;
+let prismaReady = false;
+let prismaLastError = null;
 
-if (process.env.DATABASE_URL) {
-  prisma = new PrismaClient();
-  prisma
-    .$connect()
-    .then(() => console.log("✅ DB connected"))
-    .catch((e) => console.error("❌ DB connect failed:", e?.message || e));
-} else {
-  console.error(
-    "❌ DATABASE_URL vacío. El backend arrancará sin DB (modo degradado)."
-  );
+async function initPrisma() {
+  if (!process.env.DATABASE_URL) {
+    prismaLastError = "DATABASE_URL vacío";
+    prismaReady = false;
+    console.error("❌ Prisma NO inicializa: DATABASE_URL vacío.");
+    return;
+  }
+
+  try {
+    prisma = new PrismaClient();
+    await prisma.$connect();
+    prismaReady = true;
+    prismaLastError = null;
+    console.log("✅ DB connected (Prisma)");
+  } catch (e) {
+    prismaReady = false;
+    prismaLastError = e?.message || String(e);
+    console.error("❌ DB connect failed:", prismaLastError);
+  }
 }
 
-// Evita procesos zombie
+// Inicializa al boot
+await initPrisma();
+
+// ---------------------------------------------------------
+// Evita procesos zombie + cierre limpio
+// ---------------------------------------------------------
 process.on("unhandledRejection", (err) =>
   console.error("❌ UnhandledRejection:", err)
 );
 process.on("uncaughtException", (err) =>
   console.error("❌ UncaughtException:", err)
 );
+
+process.on("SIGTERM", async () => {
+  try {
+    if (prisma) await prisma.$disconnect();
+  } catch {}
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  try {
+    if (prisma) await prisma.$disconnect();
+  } catch {}
+  process.exit(0);
+});
 
 // ---------------------------------------------------------
 // Express base
@@ -185,14 +192,49 @@ app.use(
 );
 
 // ---------------------------------------------------------
-// Debug & Health
+// Health / Env
 // ---------------------------------------------------------
-app.get("/__envcheck", (req, res) => res.json(envReport()));
 app.get("/ping", (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+app.get("/__envcheck", (req, res) => res.json(envReport()));
+
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    db: prismaReady ? "up" : "down",
+    prismaReady,
+    prismaLastError,
+  });
+});
+
+// Un solo root (sin duplicados)
 app.get("/", (req, res) =>
   res.json({ ok: true, message: "API Taller Coagro online" })
 );
+
 app.get("/whoami", (req, res) => res.send("SERVER.JS ACTIVO ✅"));
+
+// dbcheck SIN reconectar (esto te quita crashes)
+app.get("/dbcheck", async (req, res) => {
+  try {
+    if (!prisma || !prismaReady) {
+      return res.status(503).json({
+        ok: false,
+        db: "down",
+        error: prismaLastError || "Prisma no listo",
+      });
+    }
+
+    await prisma.$queryRaw`SELECT 1`;
+    return res.json({ ok: true, db: "up" });
+  } catch (e) {
+    prismaReady = false;
+    prismaLastError = e?.message || String(e);
+    return res
+      .status(500)
+      .json({ ok: false, db: "down", error: prismaLastError });
+  }
+});
 
 // ---------------------------------------------------------
 // Multer (evidencias)
@@ -200,15 +242,14 @@ app.get("/whoami", (req, res) => res.send("SERVER.JS ACTIVO ✅"));
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 },
-});   
+});
 
 /* =========================================================
    Helpers: Eventos (auditoría)
 ========================================================= */
-
 async function logOrdenEvento({ ordenId, tipo, detalle, usuarioId }) {
   try {
-    if (!prisma) return; // si no hay DB, no loguea eventos
+    if (!prisma || !prismaReady) return;
     await prisma.ordenEvento.create({
       data: {
         ordenId,
@@ -218,41 +259,37 @@ async function logOrdenEvento({ ordenId, tipo, detalle, usuarioId }) {
       },
     });
   } catch (e) {
-    console.error("No se pudo registrar evento:", e);
+    console.error("No se pudo registrar evento:", e?.message || e);
   }
 }
 
 /* =========================================================
    Middlewares: Auth + Roles
 ========================================================= */
-
 const verificarToken = (req, res, next) => {
-  // ✅ Guard pro: si Prisma no está listo, no ejecutes rutas con DB
-  if (!prisma) {
-    return res.status(500).json({
+  if (!prisma || !prismaReady) {
+    return res.status(503).json({
       error: "DB no disponible",
-      detail:
-        "Prisma no inicializó (DATABASE_URL vacío o inválido). Revisa /__envcheck y variables en Hostinger.",
+      detail: prismaLastError || "Prisma no inicializó correctamente",
     });
   }
 
   const authHeader = req.headers["authorization"];
-
-  if (!authHeader) {
+  if (!authHeader)
     return res.status(401).json({ error: "Token no proporcionado" });
-  }
 
   const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Token inválido" });
 
-  if (!token) {
-    return res.status(401).json({ error: "Token inválido" });
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({ error: "JWT_SECRET no configurado" });
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.usuario = decoded; // {id, rol, sedeId}
     next();
-  } catch (error) {
+  } catch {
     return res.status(401).json({ error: "Token inválido o expirado" });
   }
 };
@@ -280,27 +317,19 @@ const adminJefeOTecnico = (req, res, next) => {
 };
 
 /* =========================================================
-   Rutas: Public
+   Rutas: Auth
 ========================================================= */
-
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true, message: "API Taller Coagro OK" });
-});
-
 // LOGIN
 app.post("/api/auth/login", async (req, res) => {
   try {
-    // ✅ Si Prisma no existe, no intentes DB
-    if (!prisma) {
-      return res.status(500).json({
-        error: "DB no configurada",
-        detail:
-          "DATABASE_URL vacío en el proceso Node. Revisa /__envcheck y variables en Hostinger.",
+    if (!prisma || !prismaReady) {
+      return res.status(503).json({
+        error: "DB no disponible",
+        detail: prismaLastError || "Prisma no listo",
       });
     }
 
     const { email, password } = req.body;
-
     if (!email || !password) {
       return res
         .status(400)
@@ -308,31 +337,18 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     const usuario = await prisma.usuario.findUnique({ where: { email } });
-    if (!usuario) {
+    if (!usuario)
       return res.status(401).json({ error: "Credenciales inválidas" });
-    }
 
     if (!usuario.password) {
       return res.status(500).json({
-        error: "Usuario sin password en BD (null). Revisa el seed/import.",
-      });
-    }
-
-    if (!usuario.password.startsWith("$2")) {
-      return res.status(500).json({
-        error:
-          "Password en BD no está hasheado. Debe iniciar con $2 (bcrypt). Revisa import/seed.",
+        error: "Usuario sin password en BD (null). Revisa seed/import.",
       });
     }
 
     const passwordValido = await bcrypt.compare(password, usuario.password);
-    if (!passwordValido) {
+    if (!passwordValido)
       return res.status(401).json({ error: "Credenciales inválidas" });
-    }
-
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({ error: "JWT_SECRET no configurado" });
-    }
 
     const token = jwt.sign(
       { id: usuario.id, rol: usuario.rol, sedeId: usuario.sedeId },
@@ -351,7 +367,7 @@ app.post("/api/auth/login", async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Error login:", error);
+    console.error("Error login:", error?.message || error);
     return res.status(500).json({
       error: "Error en login",
       detail: error?.message || String(error),
@@ -359,6 +375,9 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+/* =========================================================
+   Equipos
+========================================================= */
 // Crear equipo (ADMIN / JEFE_TALLER)
 app.post(
   "/api/equipos",
@@ -398,20 +417,29 @@ app.post(
 
       res.status(201).json(equipo);
     } catch (error) {
-      console.error("Error creando equipo:", {
-        message: error.message,
-        code: error.code,
-        meta: error.meta,
-      });
+      console.error("Error creando equipo:", error?.message || error);
       res.status(500).json({ error: "Error creando equipo" });
     }
   }
 );
 
-/* =========================================================
-   Rutas: Órdenes
-========================================================= */
+// Listar equipos
+app.get("/api/equipos", verificarToken, async (req, res) => {
+  try {
+    const equipos = await prisma.equipo.findMany({
+      include: { cliente: true },
+      orderBy: { id: "desc" },
+    });
+    res.json(equipos);
+  } catch (error) {
+    console.error("Error listando equipos:", error?.message || error);
+    res.status(500).json({ error: "Error listando equipos" });
+  }
+});
 
+/* =========================================================
+   Órdenes
+========================================================= */
 // Crear orden
 app.post("/api/ordenes", verificarToken, async (req, res) => {
   try {
@@ -486,16 +514,12 @@ app.post("/api/ordenes", verificarToken, async (req, res) => {
 
     res.status(201).json(orden);
   } catch (error) {
-    console.error("Error creando orden de servicio:", {
-      message: error.message,
-      code: error.code,
-      meta: error.meta,
-    });
+    console.error("Error creando orden:", error?.message || error);
     res.status(500).json({ error: "Error creando orden de servicio" });
   }
 });
 
-// Listar órdenes (filtros opcionales)
+// Listar órdenes
 app.get("/api/ordenes", verificarToken, async (req, res) => {
   try {
     const { sedeId, estado } = req.query;
@@ -524,7 +548,7 @@ app.get("/api/ordenes", verificarToken, async (req, res) => {
 
     res.json(ordenes);
   } catch (error) {
-    console.error("Error listando órdenes:", error);
+    console.error("Error listando órdenes:", error?.message || error);
     res.status(500).json({ error: "Error listando órdenes" });
   }
 });
@@ -548,10 +572,9 @@ app.get("/api/ordenes/:id", verificarToken, async (req, res) => {
     });
 
     if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
-
     res.json(orden);
   } catch (error) {
-    console.error("Error obteniendo orden:", error);
+    console.error("Error obteniendo orden:", error?.message || error);
     res.status(500).json({ error: "Error obteniendo orden" });
   }
 });
@@ -602,7 +625,7 @@ app.patch("/api/ordenes/:id/estado", verificarToken, async (req, res) => {
 
     res.json(ordenActualizada);
   } catch (error) {
-    console.error("Error actualizando estado de orden:", error);
+    console.error("Error actualizando estado:", error?.message || error);
     res.status(500).json({ error: "Error actualizando estado de orden" });
   }
 });
@@ -658,7 +681,7 @@ app.patch(
 
       res.json(upd);
     } catch (error) {
-      console.error("Error asignando técnico:", error);
+      console.error("Error asignando técnico:", error?.message || error);
       res.status(500).json({ error: "Error asignando técnico" });
     }
   }
@@ -672,10 +695,9 @@ app.get("/api/tecnicos", verificarToken, async (req, res) => {
       select: { id: true, nombre: true, email: true, sedeId: true },
       orderBy: { nombre: "asc" },
     });
-
     res.json(tecnicos);
   } catch (error) {
-    console.error("Error listando técnicos:", error);
+    console.error("Error listando técnicos:", error?.message || error);
     res.status(500).json({ error: "Error listando técnicos" });
   }
 });
@@ -683,7 +705,6 @@ app.get("/api/tecnicos", verificarToken, async (req, res) => {
 /* =========================================================
    Mano de obra
 ========================================================= */
-
 app.post("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
   try {
     const ordenId = Number(req.params.id);
@@ -692,10 +713,12 @@ app.post("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
     if (Number.isNaN(ordenId))
       return res.status(400).json({ error: "ID de orden inválido" });
     if (!descripcion || horas == null) {
-      return res.status(400).json({
-        error: "Faltan datos obligatorios",
-        detalle: { descripcion, horas },
-      });
+      return res
+        .status(400)
+        .json({
+          error: "Faltan datos obligatorios",
+          detalle: { descripcion, horas },
+        });
     }
 
     const horasNum = Number(horas);
@@ -727,20 +750,23 @@ app.post("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
 
     res.status(201).json(manoObra);
   } catch (error) {
-    console.error("Error agregando mano de obra:", error);
+    console.error("Error agregando mano de obra:", error?.message || error);
     res.status(500).json({ error: "Error agregando mano de obra" });
   }
 });
 
 async function assertOrdenEditable(ordenId) {
-  if (!prisma) {
-    return { ok: false, status: 500, error: "DB no disponible (Prisma null)" };
+  if (!prisma || !prismaReady) {
+    return {
+      ok: false,
+      status: 503,
+      error: "DB no disponible (Prisma no listo)",
+    };
   }
 
   const orden = await prisma.ordenServicio.findUnique({
     where: { id: ordenId },
   });
-
   if (!orden) return { ok: false, status: 404, error: "Orden no encontrada" };
 
   const cerrada = orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
@@ -763,7 +789,7 @@ app.get("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
 
     res.json(items);
   } catch (error) {
-    console.error("Error listando mano de obra:", error);
+    console.error("Error listando mano de obra:", error?.message || error);
     res.status(500).json({ error: "Error listando mano de obra" });
   }
 });
@@ -771,7 +797,6 @@ app.get("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
 /* =========================================================
    Repuestos (catálogo + asignación a orden)
 ========================================================= */
-
 // Buscar repuestos
 app.get("/api/repuestos", verificarToken, async (req, res) => {
   try {
@@ -794,12 +819,12 @@ app.get("/api/repuestos", verificarToken, async (req, res) => {
 
     res.json(repuestos);
   } catch (error) {
-    console.error("Error listando repuestos:", error);
+    console.error("Error listando repuestos:", error?.message || error);
     res.status(500).json({ error: "Error listando repuestos" });
   }
 });
 
-// Crear repuesto (ADMIN/JEFE/TECNICO) + control duplicado por código
+// Crear repuesto (ADMIN/JEFE/TECNICO)
 app.post(
   "/api/repuestos",
   verificarToken,
@@ -820,10 +845,12 @@ app.post(
         where: { codigo: codigoClean },
       });
       if (existe) {
-        return res.status(409).json({
-          error: "Ya existe un repuesto con ese código",
-          repuesto: existe,
-        });
+        return res
+          .status(409)
+          .json({
+            error: "Ya existe un repuesto con ese código",
+            repuesto: existe,
+          });
       }
 
       const nuevo = await prisma.repuesto.create({
@@ -837,7 +864,7 @@ app.post(
 
       res.status(201).json(nuevo);
     } catch (error) {
-      console.error("Error creando repuesto:", error);
+      console.error("Error creando repuesto:", error?.message || error);
       res.status(500).json({ error: "Error creando repuesto" });
     }
   }
@@ -903,7 +930,7 @@ app.post("/api/ordenes/:id/repuestos", verificarToken, async (req, res) => {
 
     res.status(201).json(repuestoOrden);
   } catch (error) {
-    console.error("Error agregando repuesto a orden:", error);
+    console.error("Error agregando repuesto a orden:", error?.message || error);
     res.status(500).json({ error: "Error agregando repuesto a la orden" });
   }
 });
@@ -923,7 +950,7 @@ app.get("/api/ordenes/:id/repuestos", verificarToken, async (req, res) => {
 
     res.json(repuestos);
   } catch (error) {
-    console.error("Error listando repuestos:", error);
+    console.error("Error listando repuestos:", error?.message || error);
     res.status(500).json({ error: "Error listando repuestos" });
   }
 });
@@ -931,7 +958,6 @@ app.get("/api/ordenes/:id/repuestos", verificarToken, async (req, res) => {
 /* =========================================================
    Eventos: Timeline de la orden
 ========================================================= */
-
 app.get("/api/ordenes/:id/eventos", verificarToken, async (req, res) => {
   try {
     const ordenId = Number(req.params.id);
@@ -945,7 +971,7 @@ app.get("/api/ordenes/:id/eventos", verificarToken, async (req, res) => {
 
     res.json(eventos);
   } catch (error) {
-    console.error("Error listando eventos:", error);
+    console.error("Error listando eventos:", error?.message || error);
     res.status(500).json({ error: "Error listando eventos" });
   }
 });
@@ -953,7 +979,6 @@ app.get("/api/ordenes/:id/eventos", verificarToken, async (req, res) => {
 /* =========================================================
    Usuarios (ADMIN)
 ========================================================= */
-
 app.post("/api/usuarios", verificarToken, soloAdmin, async (req, res) => {
   try {
     const { nombre, email, password, rol, sedeId } = req.body;
@@ -966,11 +991,13 @@ app.post("/api/usuarios", verificarToken, soloAdmin, async (req, res) => {
 
     const rolesValidos = ["ADMIN", "JEFE_TALLER", "TECNICO"];
     if (!rolesValidos.includes(rol)) {
-      return res.status(400).json({
-        error: "Rol inválido",
-        permitido: rolesValidos,
-        recibido: rol,
-      });
+      return res
+        .status(400)
+        .json({
+          error: "Rol inválido",
+          permitido: rolesValidos,
+          recibido: rol,
+        });
     }
 
     const existe = await prisma.usuario.findUnique({ where: { email } });
@@ -986,25 +1013,13 @@ app.post("/api/usuarios", verificarToken, soloAdmin, async (req, res) => {
       return res.status(400).json({ error: "sedeId inválido" });
 
     const nuevo = await prisma.usuario.create({
-      data: {
-        nombre,
-        email,
-        password: hash,
-        rol,
-        sedeId: sedeIdNum,
-      },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        rol: true,
-        sedeId: true,
-      },
+      data: { nombre, email, password: hash, rol, sedeId: sedeIdNum },
+      select: { id: true, nombre: true, email: true, rol: true, sedeId: true },
     });
 
     res.status(201).json(nuevo);
   } catch (error) {
-    console.error("Error creando usuario:", error);
+    console.error("Error creando usuario:", error?.message || error);
     res.status(500).json({ error: "Error creando usuario" });
   }
 });
@@ -1013,280 +1028,19 @@ app.get("/api/usuarios", verificarToken, soloAdmin, async (req, res) => {
   try {
     const usuarios = await prisma.usuario.findMany({
       orderBy: { id: "asc" },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        rol: true,
-        sedeId: true,
-      },
+      select: { id: true, nombre: true, email: true, rol: true, sedeId: true },
     });
 
     res.json(usuarios);
   } catch (error) {
-    console.error("Error listando usuarios:", error);
+    console.error("Error listando usuarios:", error?.message || error);
     res.status(500).json({ error: "Error listando usuarios" });
   }
 });
 
-app.patch(
-  "/api/ordenes/:ordenId/mano-obra/:itemId",
-  verificarToken,
-  async (req, res) => {
-    try {
-      const ordenId = Number(req.params.ordenId);
-      const itemId = Number(req.params.itemId);
-      const { descripcion, horas } = req.body;
-
-      if (Number.isNaN(ordenId) || Number.isNaN(itemId)) {
-        return res.status(400).json({ error: "IDs inválidos" });
-      }
-
-      const chk = await assertOrdenEditable(ordenId);
-      if (!chk.ok) return res.status(chk.status).json({ error: chk.error });
-
-      const item = await prisma.ordenManoObra.findUnique({
-        where: { id: itemId },
-      });
-      if (!item || item.ordenId !== ordenId) {
-        return res.status(404).json({ error: "Mano de obra no encontrada" });
-      }
-
-      const horasNum = horas == null ? null : Number(horas);
-      if (horasNum !== null && (Number.isNaN(horasNum) || horasNum <= 0)) {
-        return res.status(400).json({ error: "Horas inválidas" });
-      }
-
-      const upd = await prisma.ordenManoObra.update({
-        where: { id: itemId },
-        data: {
-          descripcionTrabajo:
-            descripcion != null
-              ? String(descripcion).trim()
-              : item.descripcionTrabajo,
-          horas: horasNum != null ? horasNum : item.horas,
-        },
-      });
-
-      await logOrdenEvento({
-        ordenId,
-        tipo: "MANO_OBRA_EDITADA",
-        detalle: `Editó mano de obra #${itemId}: "${item.descripcionTrabajo}" -> "${upd.descripcionTrabajo}", horas ${item.horas} -> ${upd.horas}`,
-        usuarioId: req.usuario?.id,
-      });
-
-      res.json(upd);
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: "Error editando mano de obra" });
-    }
-  }
-);
-
-app.delete(
-  "/api/ordenes/:ordenId/mano-obra/:itemId",
-  verificarToken,
-  async (req, res) => {
-    try {
-      const ordenId = Number(req.params.ordenId);
-      const itemId = Number(req.params.itemId);
-
-      if (Number.isNaN(ordenId) || Number.isNaN(itemId)) {
-        return res.status(400).json({ error: "IDs inválidos" });
-      }
-
-      const chk = await assertOrdenEditable(ordenId);
-      if (!chk.ok) return res.status(chk.status).json({ error: chk.error });
-
-      const item = await prisma.ordenManoObra.findUnique({
-        where: { id: itemId },
-      });
-      if (!item || item.ordenId !== ordenId) {
-        return res.status(404).json({ error: "Mano de obra no encontrada" });
-      }
-
-      await prisma.ordenManoObra.delete({ where: { id: itemId } });
-
-      await logOrdenEvento({
-        ordenId,
-        tipo: "MANO_OBRA_ELIMINADA",
-        detalle: `Eliminó mano de obra #${itemId}: "${item.descripcionTrabajo}" (${item.horas}h)`,
-        usuarioId: req.usuario?.id,
-      });
-
-      res.json({ ok: true });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: "Error eliminando mano de obra" });
-    }
-  }
-);
-
-app.patch(
-  "/api/ordenes/:ordenId/repuestos/:itemId",
-  verificarToken,
-  async (req, res) => {
-    try {
-      const ordenId = Number(req.params.ordenId);
-      const itemId = Number(req.params.itemId);
-      const { cantidad, esGarantia } = req.body;
-
-      if (Number.isNaN(ordenId) || Number.isNaN(itemId)) {
-        return res.status(400).json({ error: "IDs inválidos" });
-      }
-
-      const chk = await assertOrdenEditable(ordenId);
-      if (!chk.ok) return res.status(chk.status).json({ error: chk.error });
-
-      const item = await prisma.ordenRepuesto.findUnique({
-        where: { id: itemId },
-        include: { repuesto: true },
-      });
-
-      if (!item || item.ordenId !== ordenId) {
-        return res
-          .status(404)
-          .json({ error: "Repuesto en orden no encontrado" });
-      }
-
-      const cantidadNum = cantidad == null ? null : Number(cantidad);
-      if (
-        cantidadNum !== null &&
-        (Number.isNaN(cantidadNum) || cantidadNum <= 0)
-      ) {
-        return res.status(400).json({ error: "Cantidad inválida" });
-      }
-
-      const garantia =
-        esGarantia == null ? item.esGarantia : Boolean(esGarantia);
-
-      // V1: costos quedan en 0 o se mantienen; si quieres, recalculas igual sin mostrar (ya lo tienes montado)
-      const costoUnitario = garantia ? 0 : item.repuesto?.costo || 0;
-      const cantidadFinal = cantidadNum != null ? cantidadNum : item.cantidad;
-      const subtotal = costoUnitario * cantidadFinal;
-
-      const upd = await prisma.ordenRepuesto.update({
-        where: { id: itemId },
-        data: {
-          cantidad: cantidadFinal,
-          esGarantia: garantia,
-          costoUnitario,
-          subtotal,
-        },
-        include: { repuesto: true },
-      });
-
-      await logOrdenEvento({
-        ordenId,
-        tipo: "REPUESTO_EDITADO",
-        detalle: `Editó repuesto #${itemId}: "${item.repuesto?.codigo}" cant ${item.cantidad} -> ${upd.cantidad}, garantía ${item.esGarantia} -> ${upd.esGarantia}`,
-        usuarioId: req.usuario?.id,
-      });
-
-      res.json(upd);
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: "Error editando repuesto" });
-    }
-  }
-);
-
-app.delete(
-  "/api/ordenes/:ordenId/repuestos/:itemId",
-  verificarToken,
-  async (req, res) => {
-    try {
-      const ordenId = Number(req.params.ordenId);
-      const itemId = Number(req.params.itemId);
-
-      if (Number.isNaN(ordenId) || Number.isNaN(itemId)) {
-        return res.status(400).json({ error: "IDs inválidos" });
-      }
-
-      const chk = await assertOrdenEditable(ordenId);
-      if (!chk.ok) return res.status(chk.status).json({ error: chk.error });
-
-      const item = await prisma.ordenRepuesto.findUnique({
-        where: { id: itemId },
-        include: { repuesto: true },
-      });
-
-      if (!item || item.ordenId !== ordenId) {
-        return res
-          .status(404)
-          .json({ error: "Repuesto en orden no encontrado" });
-      }
-
-      await prisma.ordenRepuesto.delete({ where: { id: itemId } });
-
-      await logOrdenEvento({
-        ordenId,
-        tipo: "REPUESTO_ELIMINADO",
-        detalle: `Eliminó repuesto #${itemId}: "${item.repuesto?.codigo} · ${item.repuesto?.descripcion}" (cant ${item.cantidad})`,
-        usuarioId: req.usuario?.id,
-      });
-
-      res.json({ ok: true });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: "Error eliminando repuesto" });
-    }
-  }
-);
-
-app.patch("/api/ordenes/:id/reabrir", verificarToken, async (req, res) => {
-  try {
-    const ordenId = Number(req.params.id);
-    if (Number.isNaN(ordenId)) {
-      return res.status(400).json({ error: "ID inválido" });
-    }
-
-    // ✅ Solo roles altos
-    const rol = req.usuario?.rol;
-    const allowed = rol === "ADMIN" || rol === "JEFE_TALLER";
-    if (!allowed) {
-      return res.status(403).json({ error: "No autorizado" });
-    }
-
-    const orden = await prisma.ordenServicio.findUnique({
-      where: { id: ordenId },
-    });
-    if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
-
-    // ✅ Solo si está cerrada
-    const cerrada =
-      orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
-    if (!cerrada) {
-      return res.status(409).json({ error: "La orden no está cerrada" });
-    }
-
-    const upd = await prisma.ordenServicio.update({
-      where: { id: ordenId },
-      data: { estado: "EN_PROCESO" },
-      include: {
-        tecnicoAsignado: true,
-        cliente: true,
-        equipo: true,
-        sede: true,
-        manoObra: true,
-        repuestos: { include: { repuesto: true } },
-      },
-    });
-
-    await logOrdenEvento({
-      ordenId,
-      tipo: "ORDEN_REABIERTA",
-      detalle: "Reabrió la orden (edición habilitada)",
-      usuarioId: req.usuario?.id,
-    });
-
-    res.json(upd);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Error reabriendo orden" });
-  }
-});
-
+/* =========================================================
+   Evidencias
+========================================================= */
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
@@ -1310,13 +1064,11 @@ app.post(
       if (Number.isNaN(ordenId))
         return res.status(400).json({ error: "ordenId inválido" });
 
-      // Validar orden existe
       const orden = await prisma.ordenServicio.findUnique({
         where: { id: ordenId },
       });
       if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
 
-      // Bloquear si cerrada (igual que todo lo demás)
       const cerrada =
         orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
       if (cerrada)
@@ -1332,7 +1084,6 @@ app.post(
       if (!ext)
         return res.status(415).json({ error: "Tipo de archivo no soportado" });
 
-      // Carpetas por orden
       const dir = path.join(
         process.cwd(),
         "uploads",
@@ -1351,7 +1102,6 @@ app.post(
       const isImage = mimetype.startsWith("image/");
       const isVideo = mimetype.startsWith("video/");
 
-      // Límite extra para videos (por seguridad)
       if (isVideo && size > 12 * 1024 * 1024) {
         return res
           .status(413)
@@ -1361,37 +1111,22 @@ app.post(
       if (isImage) {
         tipo = "FOTO";
         const outFile = `${baseName}.${ext}`;
-        const outPath = path.join(dir, outFile);
-        fs.writeFileSync(outPath, buffer);
-
+        fs.writeFileSync(path.join(dir, outFile), buffer);
         url = `/uploads/ordenes/${ordenId}/${outFile}`;
       } else if (isVideo) {
         tipo = "VIDEO";
-
-        // Guardar video tal cual (V1)
         const outFile = `${baseName}.${ext}`;
-        const outPath = path.join(dir, outFile);
-        fs.writeFileSync(outPath, buffer);
-
+        fs.writeFileSync(path.join(dir, outFile), buffer);
         url = `/uploads/ordenes/${ordenId}/${outFile}`;
-
-        // thumbnail (V1 opcional): por ahora null
         thumbnail = null;
       } else {
         return res.status(415).json({ error: "Archivo no soportado" });
       }
 
-      // Guardar en DB
       const evidencia = await prisma.ordenEvidencia.create({
-        data: {
-          ordenId,
-          tipo,
-          url,
-          thumbnail,
-        },
+        data: { ordenId, tipo, url, thumbnail },
       });
 
-      // Auditoría
       await logOrdenEvento({
         ordenId,
         tipo: "EVIDENCIA_AGREGADA",
@@ -1403,7 +1138,7 @@ app.post(
 
       res.json(evidencia);
     } catch (e) {
-      console.error(e);
+      console.error(e?.message || e);
       res.status(500).json({ error: "Error subiendo evidencia" });
     }
   }
@@ -1430,145 +1165,29 @@ app.get(
 
       res.json(items);
     } catch (e) {
-      console.error(e);
+      console.error(e?.message || e);
       res.status(500).json({ error: "Error cargando evidencias" });
     }
   }
 );
 
-//
-app.get("/debug/env", (req, res) => {
-  res.json({
-    NODE_ENV: process.env.NODE_ENV,
-    has_DATABASE_URL: !!process.env.DATABASE_URL,
-    has_JWT_SECRET: !!process.env.JWT_SECRET,
-  });
-});
-
-app.get("/debug/dburl", (req, res) => {
-  const v = process.env.DATABASE_URL || "";
-  res.json({
-    ok: true,
-    startsWithMysql: v.startsWith("mysql://"),
-    prefix10: v.slice(0, 10),
-    length: v.length,
-  });
-});
-
-app.get("/debug/db", async (req, res) => {
-  try {
-    const count = await prisma.usuario.count();
-    res.json({ ok: true, message: "DB OK", usuarios: count });
-  } catch (e) {
-    res.status(500).json({
-      ok: false,
-      message: "DB FAIL",
-      error: e?.message || String(e),
+/* =========================================================
+   Debug (solo NO-PROD)
+========================================================= */
+if (!IS_PROD) {
+  app.get("/debug/env", (req, res) => {
+    res.json({
+      NODE_ENV: process.env.NODE_ENV,
+      has_DATABASE_URL: !!process.env.DATABASE_URL,
+      has_JWT_SECRET: !!process.env.JWT_SECRET,
     });
-  }
-});
-
-app.get("/debug/login-check", async (req, res) => {
-  const email = "admin@coagro.com.co";
-  const plain = "Admin2025*";
-
-  const usuario = await prisma.usuario.findUnique({ where: { email } });
-  if (!usuario) {
-    return res.json({ found: false });
-  }
-
-  const bcryptOk = await bcrypt.compare(plain, usuario.password);
-
-  res.json({
-    found: true,
-    bcryptOk,
-    userId: usuario.id,
-    rol: usuario.rol,
-    hasJwt: !!process.env.JWT_SECRET,
   });
-});
-
-app.get("/debug/build", (req, res) => {
-  res.json({
-    ok: true,
-    build: process.env.BUILD_ID || "no-build-id",
-    time: new Date().toISOString(),
-  });
-});
-
-app.get("/debug/env-lite", (req, res) => {
-  const v = process.env.DATABASE_URL || "";
-  res.json({
-    has_DATABASE_URL: !!process.env.DATABASE_URL,
-    db_length: v.length,
-    db_prefix10: v.slice(0, 10),
-    startsWithMysql: v.startsWith("mysql://"),
-    NODE_ENV: process.env.NODE_ENV,
-  });
-});
-
-import mysql from "mysql2/promise";
-
-app.get("/debug/mysql", async (req, res) => {
-  try {
-    const url = process.env.DATABASE_URL;
-    const conn = await mysql.createConnection(url);
-    const [rows] = await conn.query("SELECT 1 AS ok");
-    await conn.end();
-    res.json({ ok: true, rows });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-app.get("/__debug_uploads", (req, res) => {
-  res.json({
-    cwd: process.cwd(),
-    UPLOADS_DIR,
-    exists: fs.existsSync(UPLOADS_DIR),
-    ordenesDir: path.join(UPLOADS_DIR, "ordenes"),
-    ordenesExists: fs.existsSync(path.join(UPLOADS_DIR, "ordenes")),
-  });
-});
-
-app.get("/__envcheck", (req, res) => {
-  const raw = process.env.DATABASE_URL || "";
-  res.json({
-    NODE_ENV: process.env.NODE_ENV || null,
-    has_DATABASE_URL: !!raw,
-    DATABASE_URL_len: raw.length,
-    DATABASE_URL_preview: raw ? raw.slice(0, 12) + "..." : null,
-    has_JWT_SECRET: !!process.env.JWT_SECRET,
-    PRISMA_CLIENT_ENGINE_TYPE: process.env.PRISMA_CLIENT_ENGINE_TYPE || null,
-    cwd: process.cwd(),
-  });
-});
-
-app.get("/dbcheck", async (req, res) => {
-  try {
-    await prisma.$connect();
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, db: "up" });
-  } catch (e) {
-    res.status(500).json({ ok: false, db: "down", error: e?.message || String(e) });
-  }
-});
-
+}
+    
 /* =========================================================
    Arranque (Hostinger / Prod Ready)
 ========================================================= */
-
 const PORT = Number(process.env.PORT) || 3000;
-
-// Healthcheck principal
-app.get("/", (req, res) => {
-  res.json({ ok: true, message: "API Taller Coagro online" });
-});
-
-// Verificación de archivo activo
-app.get("/whoami", (req, res) => {
-  res.send("SERVER.JS ACTIVO ✅");
-});
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 API Taller Coagro corriendo en http://0.0.0.0:${PORT}`);
