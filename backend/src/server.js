@@ -8,46 +8,39 @@ import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
 
-// ---------------------------------------------------------
-// __dirname real (ESM safe)
-// ---------------------------------------------------------
+/* =========================================================
+   __dirname real (ESM safe)
+========================================================= */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ---------------------------------------------------------
-// Cargar .env desde rutas posibles (Hostinger cambia cwd)
-// ---------------------------------------------------------
+/* =========================================================
+   Cargar .env desde rutas posibles (Hostinger cambia cwd)
+========================================================= */
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config();
 
-// ---------------------------------------------------------
-// Entorno
-// ---------------------------------------------------------
+/* =========================================================
+   Entorno + Sanitización (NO mutamos process.env)
+========================================================= */
 const IS_PROD =
   process.env.NODE_ENV === "production" ||
   process.env.NODE_ENV === "prod" ||
   process.env.HOSTINGER === "1";
 
-// Sanitización defensiva
 const sanitize = (v = "") =>
   String(v)
     .trim()
     .replace(/^['"]|['"]$/g, "")
     .replace(/\s+/g, "");
 
-process.env.DATABASE_URL = sanitize(
-  process.env.DATABASE_URL ||
-    process.env.DATABASE_URL_ ||
-    process.env.DATABASE_URL_FALLBACK ||
-    ""
-);
+const DATABASE_URL = sanitize(process.env.DATABASE_URL || "");
+const JWT_SECRET = sanitize(process.env.JWT_SECRET || "");
 
-process.env.JWT_SECRET = sanitize(process.env.JWT_SECRET || "");
-
-// ---------------------------------------------------------
-// Uploads (server.js en /src → uploads en /uploads)
-// ---------------------------------------------------------
+/* =========================================================
+   Uploads (server.js en /src → uploads en /uploads)
+========================================================= */
 const UPLOADS_DIR = path.resolve(__dirname, "..", "uploads");
 const UPLOADS_ORDENES_DIR = path.join(UPLOADS_DIR, "ordenes");
 
@@ -58,18 +51,19 @@ try {
   console.error("❌ No se pudo crear uploads:", e);
 }
 
-// ---------------------------------------------------------
-// Reporte de entorno (debug real)
-// ---------------------------------------------------------
+/* =========================================================
+   Reporte de entorno (debug real)
+========================================================= */
 const envReport = () => {
-  const v = process.env.DATABASE_URL || "";
   return {
     NODE_ENV: process.env.NODE_ENV || null,
     isProd: IS_PROD,
-    has_DATABASE_URL: !!v,
-    DATABASE_URL_len: v.length,
-    DATABASE_URL_preview: v ? v.slice(0, 12) + "..." : null,
-    has_JWT_SECRET: !!process.env.JWT_SECRET,
+    has_DATABASE_URL: !!DATABASE_URL,
+    DATABASE_URL_len: DATABASE_URL.length,
+    DATABASE_URL_preview: DATABASE_URL
+      ? DATABASE_URL.slice(0, 12) + "..."
+      : null,
+    has_JWT_SECRET: !!JWT_SECRET,
     cwd: process.cwd(),
     __dirname,
     UPLOADS_DIR,
@@ -81,40 +75,53 @@ const envReport = () => {
 
 console.log("ENV CHECK:", envReport());
 
-// ---------------------------------------------------------
-// Prisma: conexión única (sin reconectar en cada request)
-// ---------------------------------------------------------
+/* =========================================================
+   Prisma (HARDENED)
+   - Sin $connect() en boot (evita crashes)
+   - Singleton
+   - Ping bajo demanda
+========================================================= */
 let prisma = null;
 let prismaReady = false;
 let prismaLastError = null;
+let prismaLastOkAt = null;
 
-async function initPrisma() {
-  if (!process.env.DATABASE_URL) {
-    prismaLastError = "DATABASE_URL vacío";
+function getPrisma() {
+  if (!DATABASE_URL) {
     prismaReady = false;
-    console.error("❌ Prisma NO inicializa: DATABASE_URL vacío.");
-    return;
+    prismaLastError = "DATABASE_URL vacío";
+    return null;
   }
 
+  if (!prisma) {
+    prisma = new PrismaClient({
+      datasources: { db: { url: DATABASE_URL } },
+      log: ["error"], // baja ruido en prod
+    });
+  }
+  return prisma;
+}
+
+async function pingDb() {
   try {
-    prisma = new PrismaClient();
-    await prisma.$connect();
+    const p = getPrisma();
+    if (!p) return false;
+
+    await p.$queryRaw`SELECT 1`;
     prismaReady = true;
     prismaLastError = null;
-    console.log("✅ DB connected (Prisma)");
+    prismaLastOkAt = Date.now();
+    return true;
   } catch (e) {
     prismaReady = false;
     prismaLastError = e?.message || String(e);
-    console.error("❌ DB connect failed:", prismaLastError);
+    return false;
   }
 }
 
-// Inicializa al boot
-await initPrisma();
-
-// ---------------------------------------------------------
-// Evita procesos zombie + cierre limpio
-// ---------------------------------------------------------
+/* =========================================================
+   Evita procesos zombie + cierre limpio
+========================================================= */
 process.on("unhandledRejection", (err) =>
   console.error("❌ UnhandledRejection:", err)
 );
@@ -122,29 +129,25 @@ process.on("uncaughtException", (err) =>
   console.error("❌ UncaughtException:", err)
 );
 
-process.on("SIGTERM", async () => {
+async function gracefulShutdown() {
   try {
     if (prisma) await prisma.$disconnect();
   } catch {}
   process.exit(0);
-});
+}
 
-process.on("SIGINT", async () => {
-  try {
-    if (prisma) await prisma.$disconnect();
-  } catch {}
-  process.exit(0);
-});
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
 
-// ---------------------------------------------------------
-// Express base
-// ---------------------------------------------------------
+/* =========================================================
+   Express base
+========================================================= */
 const app = express();
 app.set("trust proxy", 1);
 
-// ---------------------------------------------------------
-// CORS + Preflight (antes de rutas)
-// ---------------------------------------------------------
+/* =========================================================
+   CORS + Preflight (antes de rutas)
+========================================================= */
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
   "https://indigo-lark-430359.hostingersite.com",
@@ -170,15 +173,15 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------------------------------------------------------
-// Parsers
-// ---------------------------------------------------------
+/* =========================================================
+   Parsers
+========================================================= */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// ---------------------------------------------------------
-// Static uploads (evita ORB)
-// ---------------------------------------------------------
+/* =========================================================
+   Static uploads (evita ORB + cache)
+========================================================= */
 app.use(
   "/uploads",
   (req, res, next) => {
@@ -191,54 +194,41 @@ app.use(
   express.static(UPLOADS_DIR)
 );
 
-// ---------------------------------------------------------
-// Health / Env
-// ---------------------------------------------------------
+/* =========================================================
+   Health / Env
+========================================================= */
 app.get("/ping", (req, res) => res.json({ ok: true, ts: Date.now() }));
-
 app.get("/__envcheck", (req, res) => res.json(envReport()));
 
 app.get("/api/health", (req, res) => {
   res.json({
     ok: true,
-    db: prismaReady ? "up" : "down",
+    db: prismaReady ? "up" : "unknown/down",
     prismaReady,
     prismaLastError,
+    prismaLastOkAt,
   });
 });
 
-// Un solo root (sin duplicados)
 app.get("/", (req, res) =>
   res.json({ ok: true, message: "API Taller Coagro online" })
 );
 
 app.get("/whoami", (req, res) => res.send("SERVER.JS ACTIVO ✅"));
 
-// dbcheck SIN reconectar (esto te quita crashes)
 app.get("/dbcheck", async (req, res) => {
-  try {
-    if (!prisma || !prismaReady) {
-      return res.status(503).json({
-        ok: false,
-        db: "down",
-        error: prismaLastError || "Prisma no listo",
-      });
-    }
-
-    await prisma.$queryRaw`SELECT 1`;
-    return res.json({ ok: true, db: "up" });
-  } catch (e) {
-    prismaReady = false;
-    prismaLastError = e?.message || String(e);
-    return res
-      .status(500)
-      .json({ ok: false, db: "down", error: prismaLastError });
-  }
+  const ok = await pingDb();
+  if (ok) return res.json({ ok: true, db: "up", prismaLastOkAt });
+  return res.status(503).json({
+    ok: false,
+    db: "down",
+    error: prismaLastError || "DB no disponible",
+  });
 });
 
-// ---------------------------------------------------------
-// Multer (evidencias)
-// ---------------------------------------------------------
+/* =========================================================
+   Multer (evidencias) - memory storage
+========================================================= */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 12 * 1024 * 1024 },
@@ -249,8 +239,10 @@ const upload = multer({
 ========================================================= */
 async function logOrdenEvento({ ordenId, tipo, detalle, usuarioId }) {
   try {
-    if (!prisma || !prismaReady) return;
-    await prisma.ordenEvento.create({
+    const p = getPrisma();
+    if (!p) return;
+
+    await p.ordenEvento.create({
       data: {
         ordenId,
         tipo,
@@ -267,13 +259,6 @@ async function logOrdenEvento({ ordenId, tipo, detalle, usuarioId }) {
    Middlewares: Auth + Roles
 ========================================================= */
 const verificarToken = (req, res, next) => {
-  if (!prisma || !prismaReady) {
-    return res.status(503).json({
-      error: "DB no disponible",
-      detail: prismaLastError || "Prisma no inicializó correctamente",
-    });
-  }
-
   const authHeader = req.headers["authorization"];
   if (!authHeader)
     return res.status(401).json({ error: "Token no proporcionado" });
@@ -281,17 +266,40 @@ const verificarToken = (req, res, next) => {
   const token = authHeader.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Token inválido" });
 
-  if (!process.env.JWT_SECRET) {
+  if (!JWT_SECRET) {
     return res.status(500).json({ error: "JWT_SECRET no configurado" });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.usuario = decoded; // {id, rol, sedeId}
     next();
   } catch {
     return res.status(401).json({ error: "Token inválido o expirado" });
   }
+};
+
+const requireDb = async (req, res, next) => {
+  const p = getPrisma();
+  if (!p) {
+    return res.status(503).json({
+      error: "DB no disponible",
+      detail: prismaLastError || "DATABASE_URL vacío",
+    });
+  }
+
+  // ping “barato” solo si nunca ha estado ok
+  if (!prismaLastOkAt) await pingDb();
+
+  if (!prismaReady) {
+    return res.status(503).json({
+      error: "DB no disponible",
+      detail: prismaLastError || "Prisma no listo",
+    });
+  }
+
+  req.prisma = p;
+  next();
 };
 
 const soloAdmin = (req, res, next) => {
@@ -319,15 +327,9 @@ const adminJefeOTecnico = (req, res, next) => {
 /* =========================================================
    Rutas: Auth
 ========================================================= */
-// LOGIN
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", requireDb, async (req, res) => {
   try {
-    if (!prisma || !prismaReady) {
-      return res.status(503).json({
-        error: "DB no disponible",
-        detail: prismaLastError || "Prisma no listo",
-      });
-    }
+    const p = req.prisma;
 
     const { email, password } = req.body;
     if (!email || !password) {
@@ -336,7 +338,7 @@ app.post("/api/auth/login", async (req, res) => {
         .json({ error: "Email y password son obligatorios" });
     }
 
-    const usuario = await prisma.usuario.findUnique({ where: { email } });
+    const usuario = await p.usuario.findUnique({ where: { email } });
     if (!usuario)
       return res.status(401).json({ error: "Credenciales inválidas" });
 
@@ -352,7 +354,7 @@ app.post("/api/auth/login", async (req, res) => {
 
     const token = jwt.sign(
       { id: usuario.id, rol: usuario.rol, sedeId: usuario.sedeId },
-      process.env.JWT_SECRET,
+      JWT_SECRET,
       { expiresIn: "5h" }
     );
 
@@ -378,13 +380,14 @@ app.post("/api/auth/login", async (req, res) => {
 /* =========================================================
    Equipos
 ========================================================= */
-// Crear equipo (ADMIN / JEFE_TALLER)
 app.post(
   "/api/equipos",
   verificarToken,
+  requireDb,
   soloAdminOJefeTaller,
   async (req, res) => {
     try {
+      const p = req.prisma;
       const { clienteId, marca, modelo, serial, descripcion } = req.body;
 
       if (!clienteId || !marca || !modelo || !serial) {
@@ -398,13 +401,13 @@ app.post(
         return res.status(400).json({ error: "clienteId inválido" });
       }
 
-      const cliente = await prisma.cliente.findUnique({
+      const cliente = await p.cliente.findUnique({
         where: { id: clienteIdNum },
       });
       if (!cliente)
         return res.status(404).json({ error: "Cliente no encontrado" });
 
-      const equipo = await prisma.equipo.create({
+      const equipo = await p.equipo.create({
         data: {
           clienteId: clienteIdNum,
           marca: String(marca).trim(),
@@ -423,10 +426,10 @@ app.post(
   }
 );
 
-// Listar equipos
-app.get("/api/equipos", verificarToken, async (req, res) => {
+app.get("/api/equipos", verificarToken, requireDb, async (req, res) => {
   try {
-    const equipos = await prisma.equipo.findMany({
+    const p = req.prisma;
+    const equipos = await p.equipo.findMany({
       include: { cliente: true },
       orderBy: { id: "desc" },
     });
@@ -440,9 +443,10 @@ app.get("/api/equipos", verificarToken, async (req, res) => {
 /* =========================================================
    Órdenes
 ========================================================= */
-// Crear orden
-app.post("/api/ordenes", verificarToken, async (req, res) => {
+app.post("/api/ordenes", verificarToken, requireDb, async (req, res) => {
   try {
+    const p = req.prisma;
+
     const {
       sedeId,
       clienteId,
@@ -485,7 +489,7 @@ app.post("/api/ordenes", verificarToken, async (req, res) => {
 
     const codigo = `OS-${sedeIdNum}-${Date.now()}`;
 
-    const orden = await prisma.ordenServicio.create({
+    const orden = await p.ordenServicio.create({
       data: {
         codigo,
         sedeId: sedeIdNum,
@@ -519,9 +523,9 @@ app.post("/api/ordenes", verificarToken, async (req, res) => {
   }
 });
 
-// Listar órdenes
-app.get("/api/ordenes", verificarToken, async (req, res) => {
+app.get("/api/ordenes", verificarToken, requireDb, async (req, res) => {
   try {
+    const p = req.prisma;
     const { sedeId, estado } = req.query;
 
     const where = {
@@ -535,7 +539,7 @@ app.get("/api/ordenes", verificarToken, async (req, res) => {
 
     if (estado) where.estado = estado;
 
-    const ordenes = await prisma.ordenServicio.findMany({
+    const ordenes = await p.ordenServicio.findMany({
       where,
       include: {
         sede: true,
@@ -553,13 +557,13 @@ app.get("/api/ordenes", verificarToken, async (req, res) => {
   }
 });
 
-// Detalle orden
-app.get("/api/ordenes/:id", verificarToken, async (req, res) => {
+app.get("/api/ordenes/:id", verificarToken, requireDb, async (req, res) => {
   try {
+    const p = req.prisma;
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ error: "ID inválido" });
 
-    const orden = await prisma.ordenServicio.findUnique({
+    const orden = await p.ordenServicio.findUnique({
       where: { id },
       include: {
         sede: true,
@@ -579,64 +583,72 @@ app.get("/api/ordenes/:id", verificarToken, async (req, res) => {
   }
 });
 
-// Cambiar estado orden
-app.patch("/api/ordenes/:id/estado", verificarToken, async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { estado } = req.body;
+app.patch(
+  "/api/ordenes/:id/estado",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const id = Number(req.params.id);
+      const { estado } = req.body;
 
-    if (Number.isNaN(id)) return res.status(400).json({ error: "ID inválido" });
+      if (Number.isNaN(id))
+        return res.status(400).json({ error: "ID inválido" });
 
-    const estadosValidos = [
-      "ABIERTA",
-      "EN_PROCESO",
-      "ESPERANDO_REPUESTO",
-      "FINALIZADA",
-      "ENTREGADA",
-    ];
-    if (!estado || !estadosValidos.includes(estado)) {
-      return res
-        .status(400)
-        .json({ error: "Estado inválido", permitido: estadosValidos });
+      const estadosValidos = [
+        "ABIERTA",
+        "EN_PROCESO",
+        "ESPERANDO_REPUESTO",
+        "FINALIZADA",
+        "ENTREGADA",
+      ];
+      if (!estado || !estadosValidos.includes(estado)) {
+        return res
+          .status(400)
+          .json({ error: "Estado inválido", permitido: estadosValidos });
+      }
+
+      const existe = await p.ordenServicio.findUnique({ where: { id } });
+      if (!existe)
+        return res.status(404).json({ error: "Orden no encontrada" });
+
+      const estadoAntes = existe.estado;
+
+      const ordenActualizada = await p.ordenServicio.update({
+        where: { id },
+        data: {
+          estado,
+          fechaSalida:
+            estado === "ENTREGADA" || estado === "FINALIZADA"
+              ? new Date()
+              : existe.fechaSalida,
+        },
+      });
+
+      await logOrdenEvento({
+        ordenId: id,
+        tipo: "ESTADO_CAMBIADO",
+        detalle: `${estadoAntes} → ${estado}`,
+        usuarioId: req.usuario?.id,
+      });
+
+      res.json(ordenActualizada);
+    } catch (error) {
+      console.error("Error actualizando estado:", error?.message || error);
+      res.status(500).json({ error: "Error actualizando estado de orden" });
     }
-
-    const existe = await prisma.ordenServicio.findUnique({ where: { id } });
-    if (!existe) return res.status(404).json({ error: "Orden no encontrada" });
-
-    const estadoAntes = existe.estado;
-
-    const ordenActualizada = await prisma.ordenServicio.update({
-      where: { id },
-      data: {
-        estado,
-        fechaSalida:
-          estado === "ENTREGADA" || estado === "FINALIZADA"
-            ? new Date()
-            : existe.fechaSalida,
-      },
-    });
-
-    await logOrdenEvento({
-      ordenId: id,
-      tipo: "ESTADO_CAMBIADO",
-      detalle: `${estadoAntes} → ${estado}`,
-      usuarioId: req.usuario?.id,
-    });
-
-    res.json(ordenActualizada);
-  } catch (error) {
-    console.error("Error actualizando estado:", error?.message || error);
-    res.status(500).json({ error: "Error actualizando estado de orden" });
   }
-});
+);
 
-// Asignar técnico (solo ADMIN/JEFE)
 app.patch(
   "/api/ordenes/:id/tecnico",
   verificarToken,
+  requireDb,
   soloAdminOJefeTaller,
   async (req, res) => {
     try {
+      const p = req.prisma;
       const id = Number(req.params.id);
       const { tecnicoId } = req.body;
 
@@ -648,11 +660,11 @@ app.patch(
         return res.status(400).json({ error: "tecnicoId inválido" });
       }
 
-      const orden = await prisma.ordenServicio.findUnique({ where: { id } });
+      const orden = await p.ordenServicio.findUnique({ where: { id } });
       if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
 
       if (tecnicoIdNum !== null) {
-        const tecnico = await prisma.usuario.findUnique({
+        const tecnico = await p.usuario.findUnique({
           where: { id: tecnicoIdNum },
         });
         if (!tecnico)
@@ -664,7 +676,7 @@ app.patch(
         }
       }
 
-      const upd = await prisma.ordenServicio.update({
+      const upd = await p.ordenServicio.update({
         where: { id },
         data: { tecnicoId: tecnicoIdNum },
         include: { tecnicoAsignado: true },
@@ -687,10 +699,10 @@ app.patch(
   }
 );
 
-// Listar técnicos
-app.get("/api/tecnicos", verificarToken, async (req, res) => {
+app.get("/api/tecnicos", verificarToken, requireDb, async (req, res) => {
   try {
-    const tecnicos = await prisma.usuario.findMany({
+    const p = req.prisma;
+    const tecnicos = await p.usuario.findMany({
       where: { rol: "TECNICO" },
       select: { id: true, nombre: true, email: true, sedeId: true },
       orderBy: { nombre: "asc" },
@@ -705,101 +717,90 @@ app.get("/api/tecnicos", verificarToken, async (req, res) => {
 /* =========================================================
    Mano de obra
 ========================================================= */
-app.post("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
-  try {
-    const ordenId = Number(req.params.id);
-    const { descripcion, horas } = req.body;
+app.post(
+  "/api/ordenes/:id/mano-obra",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const ordenId = Number(req.params.id);
+      const { descripcion, horas } = req.body;
 
-    if (Number.isNaN(ordenId))
-      return res.status(400).json({ error: "ID de orden inválido" });
-    if (!descripcion || horas == null) {
-      return res
-        .status(400)
-        .json({
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ID de orden inválido" });
+      if (!descripcion || horas == null) {
+        return res.status(400).json({
           error: "Faltan datos obligatorios",
           detalle: { descripcion, horas },
         });
-    }
+      }
 
-    const horasNum = Number(horas);
-    if (Number.isNaN(horasNum) || horasNum <= 0) {
-      return res.status(400).json({ error: "Horas inválidas (mayor a 0)" });
-    }
+      const horasNum = Number(horas);
+      if (Number.isNaN(horasNum) || horasNum <= 0) {
+        return res.status(400).json({ error: "Horas inválidas (mayor a 0)" });
+      }
 
-    const orden = await prisma.ordenServicio.findUnique({
-      where: { id: ordenId },
-    });
-    if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
+      const orden = await p.ordenServicio.findUnique({
+        where: { id: ordenId },
+      });
+      if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
 
-    const manoObra = await prisma.ordenManoObra.create({
-      data: {
+      const manoObra = await p.ordenManoObra.create({
+        data: {
+          ordenId,
+          descripcionTrabajo: String(descripcion).trim(),
+          horas: horasNum,
+          costoHora: 0,
+          subtotal: 0,
+        },
+      });
+
+      await logOrdenEvento({
         ordenId,
-        descripcionTrabajo: String(descripcion).trim(),
-        horas: horasNum,
-        costoHora: 0,
-        subtotal: 0,
-      },
-    });
+        tipo: "MANO_OBRA_AGREGADA",
+        detalle: `${String(descripcion).trim()} · ${horasNum} horas`,
+        usuarioId: req.usuario?.id,
+      });
 
-    await logOrdenEvento({
-      ordenId,
-      tipo: "MANO_OBRA_AGREGADA",
-      detalle: `${String(descripcion).trim()} · ${horasNum} horas`,
-      usuarioId: req.usuario?.id,
-    });
-
-    res.status(201).json(manoObra);
-  } catch (error) {
-    console.error("Error agregando mano de obra:", error?.message || error);
-    res.status(500).json({ error: "Error agregando mano de obra" });
+      res.status(201).json(manoObra);
+    } catch (error) {
+      console.error("Error agregando mano de obra:", error?.message || error);
+      res.status(500).json({ error: "Error agregando mano de obra" });
+    }
   }
-});
+);
 
-async function assertOrdenEditable(ordenId) {
-  if (!prisma || !prismaReady) {
-    return {
-      ok: false,
-      status: 503,
-      error: "DB no disponible (Prisma no listo)",
-    };
+app.get(
+  "/api/ordenes/:id/mano-obra",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const ordenId = Number(req.params.id);
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ID inválido" });
+
+      const items = await p.ordenManoObra.findMany({
+        where: { ordenId },
+        orderBy: { id: "desc" },
+      });
+
+      res.json(items);
+    } catch (error) {
+      console.error("Error listando mano de obra:", error?.message || error);
+      res.status(500).json({ error: "Error listando mano de obra" });
+    }
   }
-
-  const orden = await prisma.ordenServicio.findUnique({
-    where: { id: ordenId },
-  });
-  if (!orden) return { ok: false, status: 404, error: "Orden no encontrada" };
-
-  const cerrada = orden.estado === "FINALIZADA" || orden.estado === "ENTREGADA";
-  if (cerrada)
-    return { ok: false, status: 409, error: "Orden cerrada: solo lectura" };
-
-  return { ok: true, orden };
-}
-
-app.get("/api/ordenes/:id/mano-obra", verificarToken, async (req, res) => {
-  try {
-    const ordenId = Number(req.params.id);
-    if (Number.isNaN(ordenId))
-      return res.status(400).json({ error: "ID inválido" });
-
-    const items = await prisma.ordenManoObra.findMany({
-      where: { ordenId },
-      orderBy: { id: "desc" },
-    });
-
-    res.json(items);
-  } catch (error) {
-    console.error("Error listando mano de obra:", error?.message || error);
-    res.status(500).json({ error: "Error listando mano de obra" });
-  }
-});
+);
 
 /* =========================================================
    Repuestos (catálogo + asignación a orden)
 ========================================================= */
-// Buscar repuestos
-app.get("/api/repuestos", verificarToken, async (req, res) => {
+app.get("/api/repuestos", verificarToken, requireDb, async (req, res) => {
   try {
+    const p = req.prisma;
     const search = (req.query.search || "").toString().trim();
 
     const where = search
@@ -811,7 +812,7 @@ app.get("/api/repuestos", verificarToken, async (req, res) => {
         }
       : {};
 
-    const repuestos = await prisma.repuesto.findMany({
+    const repuestos = await p.repuesto.findMany({
       where,
       orderBy: { id: "asc" },
       take: 50,
@@ -824,13 +825,14 @@ app.get("/api/repuestos", verificarToken, async (req, res) => {
   }
 });
 
-// Crear repuesto (ADMIN/JEFE/TECNICO)
 app.post(
   "/api/repuestos",
   verificarToken,
+  requireDb,
   adminJefeOTecnico,
   async (req, res) => {
     try {
+      const p = req.prisma;
       const { codigo, descripcion, costo, stockGlobal } = req.body;
 
       if (!codigo || !descripcion) {
@@ -841,19 +843,17 @@ app.post(
 
       const codigoClean = String(codigo).trim();
 
-      const existe = await prisma.repuesto.findUnique({
+      const existe = await p.repuesto.findUnique({
         where: { codigo: codigoClean },
       });
       if (existe) {
-        return res
-          .status(409)
-          .json({
-            error: "Ya existe un repuesto con ese código",
-            repuesto: existe,
-          });
+        return res.status(409).json({
+          error: "Ya existe un repuesto con ese código",
+          repuesto: existe,
+        });
       }
 
-      const nuevo = await prisma.repuesto.create({
+      const nuevo = await p.repuesto.create({
         data: {
           codigo: codigoClean,
           descripcion: String(descripcion).trim(),
@@ -870,176 +870,219 @@ app.post(
   }
 );
 
-// Agregar repuesto a orden
-app.post("/api/ordenes/:id/repuestos", verificarToken, async (req, res) => {
-  try {
-    const ordenId = Number(req.params.id);
-    const { repuestoId, cantidad, esGarantia } = req.body;
+app.post(
+  "/api/ordenes/:id/repuestos",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const ordenId = Number(req.params.id);
+      const { repuestoId, cantidad, esGarantia } = req.body;
 
-    if (Number.isNaN(ordenId))
-      return res.status(400).json({ error: "ID de orden inválido" });
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ID de orden inválido" });
 
-    const repuestoIdNum = Number(repuestoId);
-    const cantidadNum = Number(cantidad);
+      const repuestoIdNum = Number(repuestoId);
+      const cantidadNum = Number(cantidad);
 
-    if (
-      Number.isNaN(repuestoIdNum) ||
-      Number.isNaN(cantidadNum) ||
-      cantidadNum <= 0
-    ) {
-      return res
-        .status(400)
-        .json({ error: "repuestoId y cantidad válidos son obligatorios" });
-    }
+      if (
+        Number.isNaN(repuestoIdNum) ||
+        Number.isNaN(cantidadNum) ||
+        cantidadNum <= 0
+      ) {
+        return res
+          .status(400)
+          .json({ error: "repuestoId y cantidad válidos son obligatorios" });
+      }
 
-    const orden = await prisma.ordenServicio.findUnique({
-      where: { id: ordenId },
-    });
-    if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
+      const orden = await p.ordenServicio.findUnique({
+        where: { id: ordenId },
+      });
+      if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
 
-    const repuesto = await prisma.repuesto.findUnique({
-      where: { id: repuestoIdNum },
-    });
-    if (!repuesto)
-      return res.status(404).json({ error: "Repuesto no encontrado" });
+      const repuesto = await p.repuesto.findUnique({
+        where: { id: repuestoIdNum },
+      });
+      if (!repuesto)
+        return res.status(404).json({ error: "Repuesto no encontrado" });
 
-    const garantia = Boolean(esGarantia);
-    const costoUnitario = garantia ? 0 : repuesto.costo;
-    const subtotal = costoUnitario * cantidadNum;
+      const garantia = Boolean(esGarantia);
+      const costoUnitario = garantia ? 0 : repuesto.costo;
+      const subtotal = costoUnitario * cantidadNum;
 
-    const repuestoOrden = await prisma.ordenRepuesto.create({
-      data: {
+      const repuestoOrden = await p.ordenRepuesto.create({
+        data: {
+          ordenId,
+          repuestoId: repuestoIdNum,
+          cantidad: cantidadNum,
+          costoUnitario,
+          esGarantia: garantia,
+          subtotal,
+        },
+        include: { repuesto: true },
+      });
+
+      await logOrdenEvento({
         ordenId,
-        repuestoId: repuestoIdNum,
-        cantidad: cantidadNum,
-        costoUnitario,
-        esGarantia: garantia,
-        subtotal,
-      },
-      include: { repuesto: true },
-    });
+        tipo: "REPUESTO_AGREGADO",
+        detalle: `${repuesto.codigo} · ${
+          repuesto.descripcion
+        } · Cant: ${cantidadNum}${garantia ? " (GARANTÍA)" : ""}`,
+        usuarioId: req.usuario?.id,
+      });
 
-    await logOrdenEvento({
-      ordenId,
-      tipo: "REPUESTO_AGREGADO",
-      detalle: `${repuesto.codigo} · ${
-        repuesto.descripcion
-      } · Cant: ${cantidadNum}${garantia ? " (GARANTÍA)" : ""}`,
-      usuarioId: req.usuario?.id,
-    });
-
-    res.status(201).json(repuestoOrden);
-  } catch (error) {
-    console.error("Error agregando repuesto a orden:", error?.message || error);
-    res.status(500).json({ error: "Error agregando repuesto a la orden" });
+      res.status(201).json(repuestoOrden);
+    } catch (error) {
+      console.error(
+        "Error agregando repuesto a orden:",
+        error?.message || error
+      );
+      res.status(500).json({ error: "Error agregando repuesto a la orden" });
+    }
   }
-});
+);
 
-// Listar repuestos de orden
-app.get("/api/ordenes/:id/repuestos", verificarToken, async (req, res) => {
-  try {
-    const ordenId = Number(req.params.id);
-    if (Number.isNaN(ordenId))
-      return res.status(400).json({ error: "ID inválido" });
+app.get(
+  "/api/ordenes/:id/repuestos",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const ordenId = Number(req.params.id);
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ID inválido" });
 
-    const repuestos = await prisma.ordenRepuesto.findMany({
-      where: { ordenId },
-      include: { repuesto: true },
-      orderBy: { id: "desc" },
-    });
+      const repuestos = await p.ordenRepuesto.findMany({
+        where: { ordenId },
+        include: { repuesto: true },
+        orderBy: { id: "desc" },
+      });
 
-    res.json(repuestos);
-  } catch (error) {
-    console.error("Error listando repuestos:", error?.message || error);
-    res.status(500).json({ error: "Error listando repuestos" });
+      res.json(repuestos);
+    } catch (error) {
+      console.error("Error listando repuestos:", error?.message || error);
+      res.status(500).json({ error: "Error listando repuestos" });
+    }
   }
-});
+);
 
 /* =========================================================
    Eventos: Timeline de la orden
 ========================================================= */
-app.get("/api/ordenes/:id/eventos", verificarToken, async (req, res) => {
-  try {
-    const ordenId = Number(req.params.id);
-    if (Number.isNaN(ordenId))
-      return res.status(400).json({ error: "ID inválido" });
+app.get(
+  "/api/ordenes/:id/eventos",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const ordenId = Number(req.params.id);
+      if (Number.isNaN(ordenId))
+        return res.status(400).json({ error: "ID inválido" });
 
-    const eventos = await prisma.ordenEvento.findMany({
-      where: { ordenId },
-      orderBy: { createdAt: "desc" },
-    });
+      const eventos = await p.ordenEvento.findMany({
+        where: { ordenId },
+        orderBy: { createdAt: "desc" },
+      });
 
-    res.json(eventos);
-  } catch (error) {
-    console.error("Error listando eventos:", error?.message || error);
-    res.status(500).json({ error: "Error listando eventos" });
+      res.json(eventos);
+    } catch (error) {
+      console.error("Error listando eventos:", error?.message || error);
+      res.status(500).json({ error: "Error listando eventos" });
+    }
   }
-});
+);
 
 /* =========================================================
    Usuarios (ADMIN)
 ========================================================= */
-app.post("/api/usuarios", verificarToken, soloAdmin, async (req, res) => {
-  try {
-    const { nombre, email, password, rol, sedeId } = req.body;
+app.post(
+  "/api/usuarios",
+  verificarToken,
+  requireDb,
+  soloAdmin,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const { nombre, email, password, rol, sedeId } = req.body;
 
-    if (!nombre || !email || !password || !rol) {
-      return res
-        .status(400)
-        .json({ error: "Nombre, email, password y rol son obligatorios" });
-    }
+      if (!nombre || !email || !password || !rol) {
+        return res
+          .status(400)
+          .json({ error: "Nombre, email, password y rol son obligatorios" });
+      }
 
-    const rolesValidos = ["ADMIN", "JEFE_TALLER", "TECNICO"];
-    if (!rolesValidos.includes(rol)) {
-      return res
-        .status(400)
-        .json({
+      const rolesValidos = ["ADMIN", "JEFE_TALLER", "TECNICO"];
+      if (!rolesValidos.includes(rol)) {
+        return res.status(400).json({
           error: "Rol inválido",
           permitido: rolesValidos,
           recibido: rol,
         });
+      }
+
+      const existe = await p.usuario.findUnique({ where: { email } });
+      if (existe)
+        return res
+          .status(409)
+          .json({ error: "Ya existe un usuario con ese email" });
+
+      const hash = await bcrypt.hash(password, 10);
+
+      const sedeIdNum = sedeId ? Number(sedeId) : null;
+      if (sedeId && Number.isNaN(sedeIdNum))
+        return res.status(400).json({ error: "sedeId inválido" });
+
+      const nuevo = await p.usuario.create({
+        data: { nombre, email, password: hash, rol, sedeId: sedeIdNum },
+        select: {
+          id: true,
+          nombre: true,
+          email: true,
+          rol: true,
+          sedeId: true,
+        },
+      });
+
+      res.status(201).json(nuevo);
+    } catch (error) {
+      console.error("Error creando usuario:", error?.message || error);
+      res.status(500).json({ error: "Error creando usuario" });
     }
-
-    const existe = await prisma.usuario.findUnique({ where: { email } });
-    if (existe)
-      return res
-        .status(409)
-        .json({ error: "Ya existe un usuario con ese email" });
-
-    const hash = await bcrypt.hash(password, 10);
-
-    const sedeIdNum = sedeId ? Number(sedeId) : null;
-    if (sedeId && Number.isNaN(sedeIdNum))
-      return res.status(400).json({ error: "sedeId inválido" });
-
-    const nuevo = await prisma.usuario.create({
-      data: { nombre, email, password: hash, rol, sedeId: sedeIdNum },
-      select: { id: true, nombre: true, email: true, rol: true, sedeId: true },
-    });
-
-    res.status(201).json(nuevo);
-  } catch (error) {
-    console.error("Error creando usuario:", error?.message || error);
-    res.status(500).json({ error: "Error creando usuario" });
   }
-});
+);
 
-app.get("/api/usuarios", verificarToken, soloAdmin, async (req, res) => {
-  try {
-    const usuarios = await prisma.usuario.findMany({
-      orderBy: { id: "asc" },
-      select: { id: true, nombre: true, email: true, rol: true, sedeId: true },
-    });
+app.get(
+  "/api/usuarios",
+  verificarToken,
+  requireDb,
+  soloAdmin,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+      const usuarios = await p.usuario.findMany({
+        orderBy: { id: "asc" },
+        select: {
+          id: true,
+          nombre: true,
+          email: true,
+          rol: true,
+          sedeId: true,
+        },
+      });
 
-    res.json(usuarios);
-  } catch (error) {
-    console.error("Error listando usuarios:", error?.message || error);
-    res.status(500).json({ error: "Error listando usuarios" });
+      res.json(usuarios);
+    } catch (error) {
+      console.error("Error listando usuarios:", error?.message || error);
+      res.status(500).json({ error: "Error listando usuarios" });
+    }
   }
-});
+);
 
 /* =========================================================
-   Evidencias
+   Evidencias (UPLOAD ASYNC - no bloquea event loop)
 ========================================================= */
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -1057,14 +1100,16 @@ function safeExt(mimetype) {
 app.post(
   "/api/ordenes/:ordenId/evidencias",
   verificarToken,
+  requireDb,
   upload.single("file"),
   async (req, res) => {
     try {
+      const p = req.prisma;
       const ordenId = Number(req.params.ordenId);
       if (Number.isNaN(ordenId))
         return res.status(400).json({ error: "ordenId inválido" });
 
-      const orden = await prisma.ordenServicio.findUnique({
+      const orden = await p.ordenServicio.findUnique({
         where: { id: ordenId },
       });
       if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
@@ -1084,6 +1129,12 @@ app.post(
       if (!ext)
         return res.status(415).json({ error: "Tipo de archivo no soportado" });
 
+      if (mimetype.startsWith("video/") && size > 12 * 1024 * 1024) {
+        return res
+          .status(413)
+          .json({ error: "Video demasiado pesado (máx 12MB)" });
+      }
+
       const dir = path.join(
         process.cwd(),
         "uploads",
@@ -1094,36 +1145,16 @@ app.post(
 
       const now = Date.now();
       const baseName = `${now}_${Math.random().toString(16).slice(2)}`;
+      const outFile = `${baseName}.${ext}`;
 
-      let tipo = "FOTO";
-      let url = "";
-      let thumbnail = null;
+      await fs.promises.writeFile(path.join(dir, outFile), buffer);
 
       const isImage = mimetype.startsWith("image/");
-      const isVideo = mimetype.startsWith("video/");
+      const tipo = isImage ? "FOTO" : "VIDEO";
+      const url = `/uploads/ordenes/${ordenId}/${outFile}`;
+      const thumbnail = null;
 
-      if (isVideo && size > 12 * 1024 * 1024) {
-        return res
-          .status(413)
-          .json({ error: "Video demasiado pesado (máx 12MB)" });
-      }
-
-      if (isImage) {
-        tipo = "FOTO";
-        const outFile = `${baseName}.${ext}`;
-        fs.writeFileSync(path.join(dir, outFile), buffer);
-        url = `/uploads/ordenes/${ordenId}/${outFile}`;
-      } else if (isVideo) {
-        tipo = "VIDEO";
-        const outFile = `${baseName}.${ext}`;
-        fs.writeFileSync(path.join(dir, outFile), buffer);
-        url = `/uploads/ordenes/${ordenId}/${outFile}`;
-        thumbnail = null;
-      } else {
-        return res.status(415).json({ error: "Archivo no soportado" });
-      }
-
-      const evidencia = await prisma.ordenEvidencia.create({
+      const evidencia = await p.ordenEvidencia.create({
         data: { ordenId, tipo, url, thumbnail },
       });
 
@@ -1147,18 +1178,20 @@ app.post(
 app.get(
   "/api/ordenes/:ordenId/evidencias",
   verificarToken,
+  requireDb,
   async (req, res) => {
     try {
+      const p = req.prisma;
       const ordenId = Number(req.params.ordenId);
       if (Number.isNaN(ordenId))
         return res.status(400).json({ error: "ordenId inválido" });
 
-      const orden = await prisma.ordenServicio.findUnique({
+      const orden = await p.ordenServicio.findUnique({
         where: { id: ordenId },
       });
       if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
 
-      const items = await prisma.ordenEvidencia.findMany({
+      const items = await p.ordenEvidencia.findMany({
         where: { ordenId },
         orderBy: { createdAt: "desc" },
       });
@@ -1178,12 +1211,20 @@ if (!IS_PROD) {
   app.get("/debug/env", (req, res) => {
     res.json({
       NODE_ENV: process.env.NODE_ENV,
-      has_DATABASE_URL: !!process.env.DATABASE_URL,
-      has_JWT_SECRET: !!process.env.JWT_SECRET,
+      has_DATABASE_URL: !!DATABASE_URL,
+      has_JWT_SECRET: !!JWT_SECRET,
     });
   });
 }
-    
+
+/* =========================================================
+   Error handler (último)
+========================================================= */
+app.use((err, req, res, next) => {
+  console.error("❌ Unhandled API error:", err?.message || err);
+  res.status(500).json({ error: "Error interno del servidor" });
+});
+
 /* =========================================================
    Arranque (Hostinger / Prod Ready)
 ========================================================= */
