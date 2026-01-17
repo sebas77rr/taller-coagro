@@ -1226,7 +1226,20 @@ app.use((err, req, res, next) => {
 });
 
 /* =========================================================
-   Arranque (Hostinger / Prod Ready)
+   Boot DB warmup + retry (PROD)
+========================================================= */
+pingDb(); // intento inicial (sin tumbar el server)
+
+// Reintento automático si la DB aún no está lista
+setInterval(() => {
+  if (!prismaReady) {
+    console.log("🔁 Reintentando conexión a DB...");
+    pingDb();
+  }
+}, 5000);
+
+/* =========================================================
+   Arranque (Render / Hostinger / Prod Ready)
 ========================================================= */
 const PORT = Number(process.env.PORT) || 3000;
 
