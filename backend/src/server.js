@@ -150,7 +150,6 @@ app.set("trust proxy", 1);
 ========================================================= */
 const ALLOWED_ORIGINS = [
   "https://greenyellow-ant-906707.hostingersite.com",
-  "https://indigo-lark-430359.hostingersite.com",
   "http://localhost:5173",
 ];
 
