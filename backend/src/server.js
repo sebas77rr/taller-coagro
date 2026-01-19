@@ -377,6 +377,41 @@ app.post("/api/auth/login", requireDb, async (req, res) => {
 });
 
 /* =========================================================
+   Clientes
+========================================================= */
+
+// GET /api/clientes?search=algo
+app.get("/api/clientes", verificarToken, requireDb, async (req, res) => {
+  try {
+    const p = req.prisma;
+    const search = (req.query.search || "").toString().trim();
+
+    const where = search
+      ? {
+          OR: [
+            { nombre: { contains: search } },
+            { documento: { contains: search } },
+            { telefono: { contains: search } },
+            { correo: { contains: search } },
+            { empresa: { contains: search } },
+          ],
+        }
+      : {};
+
+    const clientes = await p.cliente.findMany({
+      where,
+      orderBy: { id: "desc" },
+      take: 100,
+    });
+
+    res.json(clientes);
+  } catch (error) {
+    console.error("Error listando clientes:", error?.message || error);
+    res.status(500).json({ error: "Error listando clientes" });
+  }
+});
+
+/* =========================================================
    Equipos
 ========================================================= */
 app.post(
