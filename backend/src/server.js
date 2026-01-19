@@ -7,7 +7,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
-import cloudinary from "./cloudinary.js";
+import cloudinary from "./lib/cloudinary.js";
 
 
 cloudinary.config({
