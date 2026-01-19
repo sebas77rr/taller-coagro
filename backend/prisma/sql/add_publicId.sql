@@ -1,0 +1,2 @@
+ALTER TABLE `OrdenEvidencia`
+ADD COLUMN `publicId` VARCHAR(191) NULL;

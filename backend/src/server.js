@@ -7,7 +7,17 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import { fileURLToPath } from "url";
+import cloudinary from "./cloudinary.js";
 
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+
+export default cloudinary;  
 /* =========================================================
    __dirname real (ESM safe)
 ========================================================= */
@@ -1163,6 +1173,46 @@ function safeExt(mimetype) {
   return null;
 }
 
+function uploadBufferToCloudinary(buffer, { folder, resource_type }) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        resource_type, // "image" o "video"
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+
+    stream.end(buffer);
+  });
+}
+
+// =========================================================
+// Cloudinary helper (subir buffer)
+// =========================================================
+function uploadBufferToCloudinary(buffer, { folder, resource_type }) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder,
+        resource_type, // "image" | "video"
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      }
+    );
+
+    stream.end(buffer);
+  });
+}
+
+/* =========================================================
+   Evidencias (CLOUDINARY)
+========================================================= */
 app.post(
   "/api/ordenes/:ordenId/evidencias",
   verificarToken,
@@ -1191,52 +1241,59 @@ app.post(
           .json({ error: "Archivo requerido (field: file)" });
 
       const { mimetype, originalname, buffer, size } = req.file;
-      const ext = safeExt(mimetype);
-      if (!ext)
-        return res.status(415).json({ error: "Tipo de archivo no soportado" });
 
+      // Validación de tipo (reutiliza tu safeExt)
+      const ext = safeExt(mimetype);
+      if (!ext) {
+        return res.status(415).json({ error: "Tipo de archivo no soportado" });
+      }
+
+      // Límite video
       if (mimetype.startsWith("video/") && size > 12 * 1024 * 1024) {
         return res
           .status(413)
           .json({ error: "Video demasiado pesado (máx 12MB)" });
       }
 
-      const dir = path.join(
-        process.cwd(),
-        "uploads",
-        "ordenes",
-        String(ordenId)
-      );
-      ensureDir(dir);
-
-      const now = Date.now();
-      const baseName = `${now}_${Math.random().toString(16).slice(2)}`;
-      const outFile = `${baseName}.${ext}`;
-
-      await fs.promises.writeFile(path.join(dir, outFile), buffer);
-
+      // Cloudinary: define resource_type
       const isImage = mimetype.startsWith("image/");
+      const isVideo = mimetype.startsWith("video/");
+      const resource_type = isImage ? "image" : isVideo ? "video" : null;
+
+      if (!resource_type) {
+        return res.status(415).json({ error: "Tipo de archivo no soportado" });
+      }
+
+      // Sube a Cloudinary
+      const folder = `taller-coagro/ordenes/${ordenId}`;
+      const uploaded = await uploadBufferToCloudinary(buffer, {
+        folder,
+        resource_type,
+      });
+
       const tipo = isImage ? "FOTO" : "VIDEO";
-      const url = `/uploads/ordenes/${ordenId}/${outFile}`;
+      const url = uploaded.secure_url; // ✅ URL pública Cloudinary
+      const publicId = uploaded.public_id; // ✅ para borrar luego
       const thumbnail = null;
 
       const evidencia = await p.ordenEvidencia.create({
-        data: { ordenId, tipo, url, thumbnail },
+        data: { ordenId, tipo, url, thumbnail, publicId },
       });
 
       await logOrdenEvento({
         ordenId,
         tipo: "EVIDENCIA_AGREGADA",
-        detalle: `${
-          tipo === "FOTO" ? "Foto" : "Video"
-        } agregada: ${originalname}`,
+        detalle: `${tipo === "FOTO" ? "Foto" : "Video"} agregada: ${originalname}`,
         usuarioId: req.usuario?.id,
       });
 
-      res.json(evidencia);
+      return res.json(evidencia);
     } catch (e) {
-      console.error(e?.message || e);
-      res.status(500).json({ error: "Error subiendo evidencia" });
+      console.error("Error subiendo evidencia:", e?.message || e);
+      return res.status(500).json({
+        error: "Error subiendo evidencia",
+        detail: e?.message || String(e),
+      });
     }
   }
 );
@@ -1262,10 +1319,10 @@ app.get(
         orderBy: { createdAt: "desc" },
       });
 
-      res.json(items);
+      return res.json(items);
     } catch (e) {
-      console.error(e?.message || e);
-      res.status(500).json({ error: "Error cargando evidencias" });
+      console.error("Error cargando evidencias:", e?.message || e);
+      return res.status(500).json({ error: "Error cargando evidencias" });
     }
   }
 );
@@ -1294,17 +1351,17 @@ app.delete(
         return res.status(404).json({ error: "Evidencia no encontrada" });
       }
 
-      // 2) Borrar archivo físico si existe (best-effort)
-      // evidencia.url viene tipo: /uploads/ordenes/8/archivo.png
-      const absolutePath = path.join(process.cwd(), evidencia.url);
-
+      // 2) Borrar en Cloudinary (best-effort)
       try {
-        if (fs.existsSync(absolutePath)) {
-          await fs.promises.unlink(absolutePath);
+        if (evidencia.publicId) {
+          const resource_type = evidencia.tipo === "VIDEO" ? "video" : "image";
+          await cloudinary.uploader.destroy(evidencia.publicId, {
+            resource_type,
+          });
         }
       } catch (e) {
-        console.warn("⚠️ No se pudo borrar archivo físico:", e?.message || e);
-        // No tumbamos la operación por esto
+        console.warn("⚠️ No se pudo borrar en Cloudinary:", e?.message || e);
+        // no tumbamos la operación por esto
       }
 
       // 3) Borrar registro en DB

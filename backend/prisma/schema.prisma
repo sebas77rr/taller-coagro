@@ -124,6 +124,7 @@ model OrdenEvidencia {
   ordenId   Int
   tipo      EvidenciaTipo
   url       String
+  publicId  String?       // 👈 nuevo (nullable)
   thumbnail String?
   createdAt DateTime      @default(now())
   orden     OrdenServicio @relation(fields: [ordenId], references: [id], onDelete: Cascade)
