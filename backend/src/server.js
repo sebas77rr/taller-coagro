@@ -1270,6 +1270,62 @@ app.get(
   }
 );
 
+app.delete(
+  "/api/ordenes/:ordenId/evidencias/:evidenciaId",
+  verificarToken,
+  requireDb,
+  async (req, res) => {
+    try {
+      const p = req.prisma;
+
+      const ordenId = Number(req.params.ordenId);
+      const evidenciaId = Number(req.params.evidenciaId);
+
+      if (Number.isNaN(ordenId) || Number.isNaN(evidenciaId)) {
+        return res.status(400).json({ error: "IDs inválidos" });
+      }
+
+      // 1) Buscar evidencia (y validar que pertenezca a esa orden)
+      const evidencia = await p.ordenEvidencia.findFirst({
+        where: { id: evidenciaId, ordenId },
+      });
+
+      if (!evidencia) {
+        return res.status(404).json({ error: "Evidencia no encontrada" });
+      }
+
+      // 2) Borrar archivo físico si existe (best-effort)
+      // evidencia.url viene tipo: /uploads/ordenes/8/archivo.png
+      const absolutePath = path.join(process.cwd(), evidencia.url);
+
+      try {
+        if (fs.existsSync(absolutePath)) {
+          await fs.promises.unlink(absolutePath);
+        }
+      } catch (e) {
+        console.warn("⚠️ No se pudo borrar archivo físico:", e?.message || e);
+        // No tumbamos la operación por esto
+      }
+
+      // 3) Borrar registro en DB
+      await p.ordenEvidencia.delete({ where: { id: evidenciaId } });
+
+      // 4) Log
+      await logOrdenEvento({
+        ordenId,
+        tipo: "EVIDENCIA_ELIMINADA",
+        detalle: `Evidencia eliminada ID: ${evidenciaId}`,
+        usuarioId: req.usuario?.id,
+      });
+
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error("Error eliminando evidencia:", e?.message || e);
+      return res.status(500).json({ error: "Error eliminando evidencia" });
+    }
+  }
+);
+
 /* =========================================================
    Debug (solo NO-PROD)
 ========================================================= */
