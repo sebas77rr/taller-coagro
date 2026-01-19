@@ -411,6 +411,38 @@ app.get("/api/clientes", verificarToken, requireDb, async (req, res) => {
   }
 });
 
+// Crear cliente ✅ (ESTO ES LO QUE TE FALTA)
+app.post("/api/clientes", verificarToken, requireDb, async (req, res) => {
+  try {
+    const p = req.prisma;
+    const { nombre, documento, telefono, correo, empresa } = req.body;
+
+    if (!nombre || !String(nombre).trim()) {
+      return res.status(400).json({ error: "nombre es obligatorio" });
+    }
+
+    const nuevo = await p.cliente.create({
+      data: {
+        nombre: String(nombre).trim(),
+        documento: documento ? String(documento).trim() : null,
+        telefono: telefono ? String(telefono).trim() : null,
+        correo: correo ? String(correo).trim() : null,
+        empresa: empresa ? String(empresa).trim() : null,
+      },
+    });
+
+    res.status(201).json(nuevo);
+  } catch (error) {
+    console.error("Error creando cliente:", error?.message || error);
+
+    // Si hay unique constraints en el futuro, aquí puedes mapear P2002
+    res.status(500).json({
+      error: "Error creando cliente",
+      detail: error?.message || String(error),
+    });
+  }
+});
+
 /* =========================================================
    Equipos
 ========================================================= */
