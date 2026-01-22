@@ -10,7 +10,6 @@ import { fileURLToPath } from "url";
 import cloudinary from "./lib/cloudinary.js";
 import { uploadBufferToCloudinary } from "./utils/cloudinaryUpload.js";
 
-export default cloudinary;  
 /* =========================================================
    __dirname real (ESM safe)
 ========================================================= */
